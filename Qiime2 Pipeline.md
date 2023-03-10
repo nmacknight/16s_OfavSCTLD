@@ -43,13 +43,13 @@ mv ./Fastq/FastqSummaryF1L1.txt ./../
 mv ./Fastq/Undetermined* ./../
 ```
 
-## Activate Qiime2  :rocket: 
+## Activate Qiime2 
 ```
 conda activate qiime2-2022.11
 ```
 ***Your Qiime2 version will likely be more recent than mine.***
 
-# 1. Import Data  :abacus:
+# 1. Import Data
 
 With this style of import, the samples are ALREADY Demultiplexed.
 
@@ -138,7 +138,7 @@ qiime tools view ./DemultiplexedSeqs/demux-paired-end-trimmed.qzv
  Now that you have removed the primers, look at the first 40 nucleotides or so and you can see how the .qzv files differ between demux-paired-end.qzv and demux-paired-end-trimmed.qzv to visually confirm cutadapt removed your primers. 
 
 
-# 3. DADA2 :straight_ruler:
+# 3. DADA2
 
 **Chops the read length where the quality begins to become poor.**
 **Note:** Update the number after "--p-trunc-len-f" and "--p-trunc-len-r" to reflect YOUR cutoff point as determined after looking at the demux-paired-end-trimmed.qzv figures produced by the command above. While looking at the Interactive Plots tab in demux-paired-end-trimmed.qzv, you will see black bars begin to become lower in the graph. When these black bars consistently begin to reach a quality score of 30 or lower, I note that length (x-axis) where this begins and thats my cutoff length. Do this for both Forward and Reverse graphs.
@@ -181,7 +181,7 @@ qiime feature-table tabulate-seqs \
 **Note:** In the command below, the "--i-tables" are the directories of where the DADA2 results are stored from running the steps 1-3 for each specific sequencing run. We had 9 sequencing runs, so we ran steps 1-3 for each run, and have 9 unique ouput directories that need to be merged in step 4. 
 
 
-# 4. Merging Sequencing Runs :satellite:
+# 4. Merging Sequencing Runs
 
 Making a folder for all this work to go into:
 ```
@@ -341,7 +341,7 @@ qiime tools view taxa-bar-BacArc.qzv
 ```
 
 
-# 6. Generate a Phylogenetic Tree  :potted_plant:
+# 6. Generate a Phylogenetic Tree
 
 ```
 mkdir PhylogeneticTree
@@ -354,7 +354,7 @@ qiime phylogeny align-to-tree-mafft-fasttree \
 ```
 >RunTime: ~2.5 days!
 
-# 7. Export :clinking_glasses:
+# 7. Export
 
 Export Reads and Taxonomy files
 ```
@@ -376,7 +376,7 @@ qiime tools export \
 ```
 >Run Time: < 1 min.
 
-Congrats, ya did it! 
+Congrats, ya did it!  :clinking_glasses:
 
 Do me a favor, let me know if parts of this pipeline were confusing to you. Through user feedback it will be improved.
 nicholas.macknight@gmail.com
