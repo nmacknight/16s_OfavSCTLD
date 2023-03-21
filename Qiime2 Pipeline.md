@@ -244,6 +244,37 @@ qiime feature-table tabulate-seqs \
 ```
 >Run Time <1 min.
 
+## VSearch ##
+**This vsearch command is clustering sequences that are 100% identical by referencing the merged-rep-seqs and then references the merged-table to ADD the frequencies (counts) of any clustered ASV.
+```
+qiime vsearch cluster-features-de-novo \
+  --i-sequences ./merged-rep-seqs.qza \
+  --i-table ./merged-table.qza \
+  --p-perc-identity 1 \
+  --o-clustered-table clustered-table.qza \
+  --o-clustered-sequences clustered-seqs.qza
+```
+> Run Time: 5 min.
+
+
+```
+qiime feature-table summarize \
+  --i-table clustered-table.qza \
+  --o-visualization clustered-table.qzv \
+  --m-sample-metadata-file sample-metadata.tsv
+```
+>Run time: < 1 min.
+
+**View**
+```
+qiime tools view clustered-table.qzv
+
+qiime feature-table tabulate-seqs \
+	--i-data clustered-seqs.qza \
+	--o-visualization clustered-rep-seqs.qzv
+```
+> Run Time <1 min.
+
 
 # 5. Taxonomic Classification :paw_prints:
 
@@ -257,7 +288,7 @@ Anyways, back to THIS project, where we use the silva database.
 ```
 qiime feature-classifier classify-sklearn \
   --i-classifier silva-138-99-515-806-nb-classifier.qza \
-  --i-reads merged-rep-seqs.qza \
+  --i-reads clustered-rep-seqs.qza \
   --o-classification taxonomy.qza
 ```
 > Run time ~17 hours (merged-rep-seqs.qza was 12.7mb)
@@ -278,7 +309,7 @@ qiime tools view taxonomy.qzv
 Visualize
 ```
 qiime taxa barplot \
-  --i-table merged-table.qza \
+  --i-table clustered-table.qza \
   --i-taxonomy taxonomy.qza \
   --m-metadata-file sample-metadata.tsv \
   --o-visualization taxa-bar-plots.qzv
@@ -294,7 +325,7 @@ qiime tools view taxa-bar-plots.qzv
 There is a lot of chloroplast from Osteobium sp. perhaps. Lets remove them.
 ```
 qiime taxa filter-table \
-  --i-table merged-table.qza \
+  --i-table clustered-table.qza \
   --i-taxonomy taxonomy.qza \
   --p-exclude mitochondria,chloroplast \
   --p-include d__Bacteria,d__Archaea \
@@ -304,7 +335,7 @@ qiime taxa filter-table \
 
 ```
 qiime taxa filter-seqs \
-  --i-sequences merged-rep-seqs.qza \
+  --i-sequences clustered-rep-seqs.qza \
   --i-taxonomy taxonomy.qza \
   --p-exclude mitochondria,chloroplast \
   --p-include d__Bacteria,d__Archaea \
@@ -379,5 +410,5 @@ qiime tools export \
 Congrats, ya did it!  :clinking_glasses:
 
 Do me a favor, let me know if parts of this pipeline were confusing to you. Through user feedback it will be improved.
-nicholas.macknight@gmail.com
 nicholas.macknight@noaa.gov
+nicholas.macknight@gmail.com
