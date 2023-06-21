@@ -146,7 +146,7 @@ qiime tools view ./DemultiplexedSeqs/demux-paired-end-trimmed.qzv
 ```
 mkdir ./DADA2
 qiime dada2 denoise-paired \
-  --i-demultiplexed-seqs ./DemultiplexedSeqs/demux-paired-end.qza \
+  --i-demultiplexed-seqs ./DemultiplexedSeqs/demux-paired-end-trimmed.qza \
   --p-trim-left-f 0 \
   --p-trunc-len-f 280 \
   --p-trim-left-r 0 \
