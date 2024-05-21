@@ -1,0 +1,1690 @@
+---
+title: "16sMasterDraftV1"
+author: "Nick MacKnight"
+date: "4/22/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Purpose
+
+The purpose of this document is to act as an efficient, streamlined, and comprehensive script to perform 16s analysis.
+
+Stages:
+
+1.) Questions.
+  - Specifically write out the questions that the analysis is intended to address.
+
+2.) Meta analysis curation.
+  - This is a foundational file that any downstream file will be susbsetted from.
+
+3.) Specify the independent variable to be explored. 
+  - This rmarkdown will be associated with a independent variable or a combination of multiple to be explored from start to finish. 
+  - i.e a report will be comparing treatment. a completely separate report will be comparing disease outcome or species. 
+  - However combined reports can be created that combine treatment and species. so lets say you want to compare species in just diesase-exposed treatment. that would be a separate report. This way independent variables stay organized by their separation and you know that independent variable was explored with the comprehensive list of analysis. 
+  
+4.) Analysis to perform
+EVE
+CLR + TSS Normalization
+NMDS
+SIMPER
+Stacked Column
+ANCOM-BCII
+Diversity
+
+# Libraries
+```{r Libraries}
+
+# NMDS
+library(vegan)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+
+# Pairwise Adonis
+#install.packages('devtools')
+library(devtools)
+#install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+
+# Violin Plots
+#install.packages("wesanderson")
+library(tidyverse)
+library(ggthemes)  # for a mapping theme
+#library(ggalt)  # for custom map projections
+library(ggrepel)  # for annotations
+library(viridis)  # for nice colours
+library(broom)  # for cleaning up models
+#devtools::install_github("wilkox/treemapify")
+library(treemapify)  # for making area graphs
+library(wesanderson)  # for nice colours
+#install.packages("cli")
+library(cli)
+library(ggplot2)
+#source("https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R")
+
+
+# Diversity
+library(betapart)
+
+```
+
+
+
+# Read in Prepared Files
+```{r}
+counts_metadata_sub <- read.csv("counts_metadata_sub.csv") # Non-Normalized Master File from Prep.Rm
+```
+
+# Normalization
+There are several ways to normalize 16s data and each microbial ecologist is willing to defend their method as the only conceivable way and declare others as completely ridiculous and only a fool would disagree with them. Id like to put them all in a room. For science.
+
+So, I will consider different normalization strategies. I, am in favor of total sum scaling TSS, or proportional normalization. Lets say a sample has 10,000 reads in total and I want to normalize all samples to 5,000 reads per sample as I have determined through my rarefaction graphing that 5,000 is the lower quartile read depth and around where I capture the most unique ASVs while retaining the most samples. Anyways, TSS normalization will scale the 10,000 read sample to 5,000 reads and effectively cut the reads across all samples in half so that read depth is not a bias and multiple samples can be fairly compared. To me this makes the most sense in my head relative to other normalization methods. What I recommend is you go with what your advisor favors/has used in the past. If you are in the position to consider your preference, I recommend you explore whats out there, and apply these methods with your data to get an appreciation and go from there. 
+```{r}
+# This is the proportional normalization function.
+# In a more detailed explanation of how this function works, it will consider the cut off read depth, defined outside this function as "minimum_row_sum". It looks at a coral sample and the read depth across all bacteria. It ranks this read depth from 1 to the total read depth for that sample. So lets say ASV1 has a read depth of 10 and the second ASV2 has a read depth of 50. The function will give positional assignment of numbers 1-10 to ASV1 and 11-51 to ASV2 and so on for all ASVs and their read depth. Then, it will randomly select a number the number of times equal to the desired cutoff read depth. This way, the more reads an ASV has, the greater chance the randomly selected number is one that was assigned to that ASV. As a result, the normalization that occurs is proportional to the original read depth, where ASVs with higher read depth will likely be higher than those that originally had lower read depth, but now the read depth across all samples is the same, and normalized for comparison. This is similar to rarefaction, however rarefaction simply randomly selects  numbers, this proportional normalization assigns that positional number so the random samply is relative to the original read depth. 
+
+## Initially takes in a row of the data and the number of samples to take.
+sample_species <- function(counts,n) {
+  num_species <- length(counts)
+  total_count <- sum(counts)
+  samples <- sample(1:total_count,n,replace=FALSE)
+  samples <- samples[order(samples)]
+  result <- array(0,num_species)
+  total <- 0
+  for (i in 1:num_species) {
+    result[i] <- length(which(samples > total & samples <= total+counts[i]))
+    total <- total+counts[i]
+  }
+  return(result)
+}
+
+# Find the minimum row sum
+subset_rows <- counts_metadata_sub[,31:length(counts_metadata_sub)]
+row_sums <- rowSums(subset_rows)
+minimum_row_sum <- min(row_sums)
+
+
+countsn <- t(apply(counts_metadata_sub[31:length(counts_metadata_sub)], 1, sample_species,minimum_row_sum))
+
+
+
+#Add Back Metadata and Bacteria Annotations. 
+ASV <- as.data.frame(countsn)
+selected_columns <- counts_metadata_sub[, 1:30]
+ASV_merged <- cbind(selected_columns, ASV)
+colnames(ASV_merged) <- colnames(counts_metadata_sub)
+
+```
+
+```{r}
+merged_data <- ASV_merged
+#merged_data <- read.csv("Ofav SCTLD EVE/merged_data.csv")
+dim(merged_data)
+head(merged_data)
+#merged_data <- merged_data[,-1] # remove the first column 
+rowSums(merged_data[,31:length(merged_data)]) # should be  5152
+
+
+# Omit NA values in the specified column
+merged_data <- merged_data[!is.na(merged_data$RGroup.all.genotypes.but.5.clusters), ]
+merged_data <- merged_data[!is.na(merged_data$RGroup.allclustered), ] #1211 samples
+
+# Define the order of levels for the "Susceptibility Cluster" column
+unique(merged_data$RGroup.allclustered)
+RGroup.allclustered_levels <- c("Highly Susceptible","Susceptible","Intermediate","Resistant")
+
+# Define the order of levels for the "5 Susceptibility Cluster" column
+unique(merged_data$RGroup.all.genotypes.but.5.clusters)
+RGroup.all.genotypes.but.5.clusters_levels <- c("Highly Susceptible","Susceptible","Intermediate","Resistant","1/1 Resistant")
+
+
+merged_data$RGroup.allclustered <- factor(merged_data$RGroup.allclustered, levels = RGroup.allclustered_levels)
+merged_data$RGroup.all.genotypes.but.5.clusters <- factor(merged_data$RGroup.all.genotypes.but.5.clusters, levels = RGroup.all.genotypes.but.5.clusters_levels)
+
+
+
+```
+
+# Treatment Specific metadata files
+```{r }
+merged_data_C <- merged_data[merged_data$Treatment == "C", ] # 597 samples
+merged_data_D <- merged_data[merged_data$Treatment == "D", ] # 646 samples
+merged_data_DH <- merged_data[merged_data$Final.State == "Healthy", ] # 426 samples
+merged_data_DD <- merged_data[merged_data$Final.State == "Diseased", ] # 254
+
+
+# Remove rows with row names "NA" and "NA.1" # I do not know why these blank rows are here. always nice. 
+merged_data_DH <- merged_data_DH[!(rownames(merged_data_DH) %in% c("NA", "NA.1")), ]
+merged_data_DD <- merged_data_DD[!(rownames(merged_data_DD) %in% c("NA", "NA.1")), ]
+
+# For alpha diversity only
+counts_metadata_sub <- counts_metadata_sub[!is.na(counts_metadata_sub$RGroup.all.genotypes.but.5.clusters), ]
+counts_metadata_sub <- counts_metadata_sub[!is.na(counts_metadata_sub$RGroup.allclustered), ] #1211 samples
+
+counts_metadata_sub_C <- counts_metadata_sub[counts_metadata_sub$Treatment == "C", ] # 597 samples
+counts_metadata_sub_D <- counts_metadata_sub[counts_metadata_sub$Treatment == "D", ] # 646 samples
+counts_metadata_sub_DH <- counts_metadata_sub[counts_metadata_sub$Final.State == "Healthy", ] # 426 samples
+counts_metadata_sub_DD <- counts_metadata_sub[counts_metadata_sub$Final.State == "Diseased", ] # 254
+
+
+
+```
+
+```{r}
+dim(merged_data_C)
+dim(merged_data_D)
+dim(merged_data_DH)
+dim(merged_data_DD)
+
+```
+
+```{r NMDS, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS=metaMDS(merged_data[31:length(merged_data)])
+NMDS$stress #0.2186129
+attach(NMDS)
+stressplot(NMDS)
+```
+
+
+```{r NMDS Display, echo=FALSE}
+library(vegan)
+
+ordiplot(NMDS)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS, display="sites", cex =0.1)
+points(NMDS,col=cols[as.factor(merged_data$RGroup.all.genotypes.but.5.clusters)],pch=pchs[as.factor(merged_data$RGroup.all.genotypes.but.5.clusters)],cex=0.5)
+ordiellipse(NMDS,groups=merged_data$RGroup.all.genotypes.but.5.clusters, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=unique(merged_data$RGroup.all.genotypes.but.5.clusters), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+ordiplot(NMDS)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS, display="sites", cex =0.1)
+points(NMDS,col=cols[as.factor(merged_data$RGroup.allclustered)],pch=pchs[as.factor(merged_data$RGroup.allclustered)],cex=0.5)
+ordiellipse(NMDS,groups=merged_data$RGroup.allclustered, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=unique(merged_data$RGroup.allclustered), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+```
+
+```{r NMDS-C, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS_C=metaMDS(merged_data_C[31:length(merged_data_C)])
+NMDS_C$stress #0.2163024
+attach(NMDS_C)
+stressplot(NMDS_C)
+```
+```{r NMDS-C Display, echo=FALSE}
+ordiplot(NMDS_C)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_C, display="sites", cex =0.1)
+points(NMDS_C,col=cols[as.factor(merged_data_C$RGroup.all.genotypes.but.5.clusters)],pch=pchs[as.factor(merged_data_C$RGroup.all.genotypes.but.5.clusters)],cex=0.5)
+ordiellipse(NMDS_C,groups=merged_data_C$RGroup.all.genotypes.but.5.clusters, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_C$RGroup.all.genotypes.but.5.clusters), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+ordiplot(NMDS_C)
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_C, display="sites", cex =0.1)
+points(NMDS_C,col=cols[as.factor(merged_data_C$RGroup.allclustered)],pch=pchs[as.factor(merged_data_C$RGroup.allclustered)],cex=0.5)
+ordiellipse(NMDS_C,groups=merged_data_C$RGroup.allclustered, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_C$RGroup.allclustered), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+```
+
+```{r NMDS-D, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS_D=metaMDS(merged_data_D[31:length(merged_data_D)])
+NMDS_D$stress #0.2151051
+attach(NMDS_D)
+stressplot(NMDS_D)
+```
+```{r NMDS_D, echo=FALSE}
+ordiplot(NMDS_D)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_D, display="sites", cex =0.1)
+points(NMDS_D,col=cols[as.factor(merged_data_D$RGroup.all.genotypes.but.5.clusters)],pch=pchs[as.factor(merged_data_D$RGroup.all.genotypes.but.5.clusters)],cex=0.5)
+ordiellipse(NMDS_D,groups=merged_data_D$RGroup.all.genotypes.but.5.clusters, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_D$RGroup.all.genotypes.but.5.clusters), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+ordiplot(NMDS_D)
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_D, display="sites", cex =0.1)
+points(NMDS_D,col=cols[as.factor(merged_data_D$RGroup.allclustered)],pch=pchs[as.factor(merged_data_D$RGroup.allclustered)],cex=0.5)
+ordiellipse(NMDS_D,groups=merged_data_D$RGroup.allclustered, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_D$RGroup.allclustered), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+
+```
+```{r NMDS-DH, echo=FALSE}
+RGroup.all.genotypes.but.5.clusters_levels <- c("Highly Susceptible","Susceptible","Intermediate","Resistant","1/1 Resistant")
+merged_data_DH$RGroup.all.genotypes.but.5.clusters <- factor(merged_data_DH$RGroup.all.genotypes.but.5.clusters, levels = RGroup.all.genotypes.but.5.clusters_levels)
+
+library(vegan)
+NMDS_DH=metaMDS(merged_data_DH[31:length(merged_data_DH)])
+NMDS_DH$stress #0.2068685
+attach(NMDS_DH)
+stressplot(NMDS_DH)
+```
+
+```{r NMDS_DH, echo=FALSE}
+ordiplot(NMDS_DH)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_DH, display="sites", cex =0.1)
+points(NMDS_DH,col=cols[as.factor(merged_data_DH$RGroup.all.genotypes.but.5.clusters)],pch=pchs[as.factor(merged_data_DH$RGroup.all.genotypes.but.5.clusters)],cex=0.5)
+ordiellipse(NMDS_DH,groups=merged_data_DH$RGroup.all.genotypes.but.5.clusters, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x = "topright", legend = levels(merged_data_DH$RGroup.all.genotypes.but.5.clusters), col = cols, pch = pchs)
+
+ordiplot(NMDS_DH)
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_DH, display="sites", cex =0.1)
+points(NMDS_DH,col=cols[as.factor(merged_data_DH$RGroup.allclustered)],pch=pchs[as.factor(merged_data_DH$RGroup.allclustered)],cex=0.5)
+ordiellipse(NMDS_DH,groups=merged_data_DH$RGroup.allclustered, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x = "topright", legend = levels(merged_data_DH$RGroup.allclustered), col = cols, pch = pchs)
+
+
+```
+
+```{r NMDS-DD, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS_DD=metaMDS(merged_data_DD[31:length(merged_data_DD)])
+NMDS_DD$stress #0.1908412
+attach(NMDS_DD)
+stressplot(NMDS_DD)
+```
+
+```{r NMDS_DD, echo=FALSE}
+ordiplot(NMDS_DD)
+
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_DD, display="sites", cex =0.1)
+points(NMDS_DD,col=cols[as.factor(merged_data_DD$RGroup.all.genotypes.but.5.clusters)],pch=pchs[as.factor(merged_data_DD$RGroup.all.genotypes.but.5.clusters)],cex=0.5)
+ordiellipse(NMDS_DD,groups=merged_data_DD$RGroup.all.genotypes.but.5.clusters, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_DD$RGroup.all.genotypes.but.5.clusters), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+ordiplot(NMDS_DD)
+# By Genotype Susceptibility
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_DD, display="sites", cex =0.1)
+points(NMDS_DD,col=cols[as.factor(merged_data_DD$RGroup.allclustered)],pch=pchs[as.factor(merged_data_DD$RGroup.allclustered)],cex=0.5)
+ordiellipse(NMDS_DD,groups=merged_data_DD$RGroup.allclustered, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_DD$RGroup.allclustered), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+
+```
+# SIMPER
+```{r SIMPER, cache=TRUE}
+#SIMPER analysis
+library(vegan)
+
+# Controls Only - Comparing RGroup.allclustered
+simper.C.RGroup.allclustered=simper(merged_data_C[,31:length(merged_data_C)],merged_data_C$RGroup.allclustered)
+simper.C.RGroup.all.genotypes.but.5.clusters=simper(merged_data_C[,31:length(merged_data_C)],merged_data_C$RGroup.all.genotypes.but.5.clusters)
+
+```
+
+# PERMANOVA
+```{r PERMANOVA, cache=TRUE}
+# >  Run time: ~7 min 
+adonis_C_RGroup.allclustered <- adonis2(merged_data_C[31:length(merged_data_C)]~RGroup.allclustered, data=merged_data_C, permutations=10000) #9.999e-05 ***
+adonis_C_RGroup.all.genotypes.but.5.clusters <- adonis2(merged_data_C[31:length(merged_data_C)]~RGroup.all.genotypes.but.5.clusters, data=merged_data_C, permutations=10000) #9.999e-05 ***
+
+adonis_C <- adonis2(merged_data_C[31:length(merged_data_C)]~RGroup.all.genotypes.but.5.clusters+Disease.Prevalence+timepoint+Experiment+Tank, data=merged_data_C, permutations=10000)
+
+
+adonis_C_RGroup.allclustered
+adonis_C_RGroup.all.genotypes.but.5.clusters
+adonis_C
+```
+
+# Pairwise PERMANOVA
+```{r Pairwise PERMANOVA, cache=TRUE}
+
+# RGroup.allclustered
+Padonis_C_RGroup.allclustered <- pairwise.adonis(merged_data_C[31:length(merged_data_C)],merged_data_C$RGroup.allclustered) 
+Padonis_C_RGroup.allclustered # Intermediates are sigdiff from everyone
+
+# RGroup.all.genotypes.but.5.clusters
+Padonis_C_RGroup.all.genotypes.but.5.clusters <- pairwise.adonis(merged_data_C[31:length(merged_data_C)],merged_data_C$RGroup.all.genotypes.but.5.clusters) # 
+Padonis_C_RGroup.all.genotypes.but.5.clusters # Intermediates still sigdiff from everyone but now Resistant category has sigdiff with everyone, even 1/1 Resistant
+
+# +1 point for RGroup.all.genotypes.but.5.clusters possibly being a better "separator" of the data. 
+```
+
+# Diversity Indices
+```{r shannon}
+# Shannon (alpha) diversity
+# Non-normalized data are ideal for alpha diversity.
+counts_metadata_sub
+H=diversity(counts_metadata_sub[,31:length(counts_metadata_sub)])
+H_C=diversity(counts_metadata_sub_C[,31:length(counts_metadata_sub_C)])
+H_D=diversity(counts_metadata_sub_D[,31:length(counts_metadata_sub_D)])
+# H_C=diversity(merged_data_C[,31:length(merged_data_C)])
+
+```
+## Pielous Evenness
+```{r Pielou}
+# Pielous Evenness
+J=H/log(specnumber(merged_data[,31:length(merged_data)]))
+J_C=H_C/log(specnumber(merged_data_C[,31:length(merged_data_C)]))
+J_D=H_D/log(specnumber(merged_data_D[,31:length(merged_data_D)]))
+```
+## Simpson
+```{r Simpson}
+# Simpson
+S <- diversity(merged_data[,31:length(merged_data)], index="simpson")
+S_C <- diversity(merged_data_C[,31:length(merged_data_C)], index="simpson")
+S_D <- diversity(merged_data_D[,31:length(merged_data_D)], index="simpson")
+```
+## Inverse Simpson
+```{r Inverse Simpson}
+# Inverse Simpson
+IS <- diversity(merged_data[,31:length(merged_data)], index="invsimpson")
+IS_C <- diversity(merged_data_C[,31:length(merged_data_C)], index="invsimpson")
+IS_D <- diversity(merged_data_D[,31:length(merged_data_D)], index="invsimpson")
+```
+
+## Beta Diversity
+```{r beta}
+#beta diversity by Site by abundance data (could try by presence or absence)
+
+library(betapart)
+
+dist<-bray.part(merged_data[,31:length(merged_data)])
+bd<-betadisper(dist[[3]],merged_data$timepoint)
+bd
+beta <- bd$distances
+
+# Controls
+dist_C<-bray.part(merged_data_C[,31:length(merged_data_C)])
+bd_C<-betadisper(dist_C[[3]],merged_data_C$timepoint)
+bd_C
+beta_C <- bd_C$distances
+
+# Disease
+dist_D<-bray.part(merged_data_D[,31:length(merged_data_D)])
+bd_D<-betadisper(dist_D[[3]],merged_data_D$timepoint)
+bd_D
+beta_D <- bd_D$distances
+
+
+```
+
+## Combine Diversity Metrics into one data frame.
+```{r}
+D.diversity <- cbind(merged_data[,1:30],H,J,S, IS,beta)
+D.diversity_C <- cbind(merged_data_C[,1:30], H_C,J_C,S_C, IS_C,beta_C)
+D.diversity_D <- cbind(merged_data_D[,1:30], H_D,J_D,S_D, IS_D,beta_D)
+```
+
+## Diversity Normality
+```{r}
+#Testing for normality. A pvalue <0.05 means significant deviation from normal data. ie. its not normally distributed data.
+shapiro.test(D.diversity_C$H_C)#
+shapiro.test(D.diversity_C$J_C)#
+shapiro.test(D.diversity_C$S_C)#
+shapiro.test(D.diversity_C$IS_C)#
+shapiro.test(D.diversity_C$beta_C)#
+```
+
+## Diversity Sigdiff
+```{r}
+kruskal.test(H_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)# 
+
+kruskal.test(H_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)# 
+
+```
+
+## Diversity Box and Whisker Plots
+```{r Diversity Box and Whisker - Controls Only}
+unique(D.diversity_C$RGroup.all.genotypes.but.5.clusters)
+D.diversity_C$RGroup.all.genotypes.but.5.clusters <- factor(D.diversity_C$RGroup.all.genotypes.but.5.clusters, levels = c("Resistant","1/1 Resistant","Intermediate","Susceptible", "Highly Susceptible"))
+
+library(ggplot2)
+distributionsH_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = H_C, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = H_C, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Shannon Diversity", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font sizes
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2"))
+
+distributionsJ_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = J_C, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = J_C, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Pielous Evenness", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsS_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = S_C, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = S_C, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Simpson Diversity", x = "RGroup.all.genotypes.but.5.clusters") +
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsIS_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = IS_C, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = IS_C, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Inverse Simpson", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsB_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = beta_C, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = beta_C, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Beta Diversity", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+library(patchwork)
+distributionsH_C + distributionsJ_C + distributionsS_C + distributionsB_C #+ distributionsH_Craw
+```
+```{r Diversity Box and Whisker - Disease Only}
+unique(D.diversity_D$RGroup.all.genotypes.but.5.clusters)
+D.diversity_D$RGroup.all.genotypes.but.5.clusters <- factor(D.diversity_D$RGroup.all.genotypes.but.5.clusters, levels = c("Resistant","1/1 Resistant","Intermediate","Susceptible", "Highly Susceptible"))
+
+library(ggplot2)
+distributionsH_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = H_D, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = H_D, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Shannon Diversity", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font sizes
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2"))
+
+distributionsJ_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = J_D, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = J_D, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Pielous Evenness", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsS_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = S_D, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = S_D, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Simpson Diversity", x = "RGroup.all.genotypes.but.5.clusters") +
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsIS_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = IS_D, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = IS_D, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Inverse Simpson", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsB_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = RGroup.all.genotypes.but.5.clusters, y = beta_D, fill = RGroup.all.genotypes.but.5.clusters)) +
+  geom_point(aes(y = beta_D, color = RGroup.all.genotypes.but.5.clusters), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Beta Diversity", x = "RGroup.all.genotypes.but.5.clusters") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+library(patchwork)
+distributionsH_D + distributionsJ_D + distributionsS_D + distributionsB_D #+ distributionsH_Draw
+```
+## Stacked Column Graph
+```{r,Stacked Column Graph Control}
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts <- rowSums(merged_data_C[,31:length(merged_data_C)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance <- ((merged_data_C[,31:length(merged_data_C)]) / total_counts) * 100
+
+# Identify columns with any cell greater than or equal to 0.03
+selected_columns_C <- colSums(percent_abundance[,31:length(percent_abundance)] >= 3) > 0
+
+# Subset the original data frame to retain only selected columns
+filtered_asv_data_C <- percent_abundance[, selected_columns_C]
+
+# Combine with metadata
+ASV_Percent_Controls <- cbind(merged_data_C[,1:30], filtered_asv_data_C)
+
+```
+
+```{r,Stacked Column Graph Disease}
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts <- rowSums(merged_data_D[,31:length(merged_data_D)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance_D <- ((merged_data_D[,31:length(merged_data_D)]) / total_counts) * 100
+
+# Identify columns with any cell greater than or equal to 0.03
+selected_columns_D <- colSums(percent_abundance_D[,31:length(percent_abundance_D)] >= 3) > 0
+
+# Subset the original data frame to retain only selected columns
+filtered_asv_data_D <- percent_abundance_D[, selected_columns_D]
+
+# Combine with metadata
+ASV_Percent_Disease <- cbind(merged_data_D[,1:30], filtered_asv_data_D)
+```
+
+```{r simplify taxonomy}
+
+taxonomy <- read.csv("../taxonomy/taxonomy.csv")
+
+# Simplify Taxon ID. 
+taxonomy <- taxonomy %>%
+  mutate(SimplifiedTaxon = case_when(
+    Confidence >= 1.00 ~ ifelse(grepl("s__", Taxon), sub(".*s__([^;]+).*", "s__\\1", Taxon), sub(".*g__([^;]+).*", "g__\\1", Taxon)),
+    Confidence > 0.97 ~ ifelse(grepl("s__", Taxon), sub(".*s__([^;]+).*", "s__\\1", Taxon), sub(".*g__([^;]+).*", "g__\\1", Taxon)),
+    Confidence > 0.95 ~ ifelse(grepl("g__", Taxon), sub(".*g__([^;]+).*", "g__\\1", Taxon), sub(".*f__([^;]+).*", "f__\\1", Taxon)),
+    Confidence > 0.90 ~ sub(".*f__([^;]+).*", "f__\\1", Taxon),
+    Confidence > 0.85 ~ sub(".*o__([^;]+).*", "o__\\1", Taxon),
+    Confidence > 0.80 ~ sub(".*c__([^;]+).*", "c__\\1", Taxon),
+    Confidence > 0.77 ~ sub(".*p__([^;]+).*", "p__\\1", Taxon),
+    TRUE ~ sub(".*d__([^;]+).*", "d__\\1", Taxon)
+  ))
+
+# Replace/Remove s__, g__, and so on. 
+taxonomy <- taxonomy %>%
+  mutate(SimplifiedTaxon = gsub("^[a-z]__", "", SimplifiedTaxon),  # Remove prefixes
+         SimplifiedTaxon = case_when(
+           grepl("^s__", SimplifiedTaxon) ~ paste0(SimplifiedTaxon, " sp."),  # Add " sp." for s__
+           grepl("^g__", SimplifiedTaxon) ~ paste0(SimplifiedTaxon, " spp."),  # Add " spp." for g__
+           TRUE ~ SimplifiedTaxon  # Keep others as is
+         ))
+# Creating a new column of just the Order taxonomic level - nice for stacked percent barplots
+taxonomy <- taxonomy %>%
+  mutate(Order = sub(".*o__([^;]+);.*", "\\1", Taxon))
+
+taxonomy$species <- taxonomy$ASV # Create a new column "species" with rownames
+
+# concatenate the "Order" column to the "species" column. This is so that we can analyze by ASV but have a relevant Order name to evaluate that ASV when looking at a graph. 
+taxonomy$species <- paste(taxonomy$Order,taxonomy$species, sep = "_")
+
+
+head(taxonomy)
+
+#to put the taxonomy in the right format
+taxonomy_ps <- taxonomy
+rownames(taxonomy_ps) <- taxonomy_ps[,1]
+taxonomy_ps <- taxonomy_ps[,-1]
+
+```
+
+```{r}
+mytheme <- theme(legend.position= "right", 
+                 legend.text=element_text(size=8), 
+                 legend.title = element_text(size=10), 
+                 #legend.position = "none",
+                 axis.text.x =element_text(colour = "black", size=12,angle = 90, hjust = 1), #element_blank(),
+                 axis.text.y = element_text(colour = "black", size=12), 
+                 axis.title.x = element_text(size=14), 
+                 axis.title.y = element_text(size=14), 
+                 strip.text.x = element_text(colour = "black", size = 8),
+                 axis.ticks.x = element_blank() 
+)
+
+
+
+# Rename ASVs by their Order ID so that Stacked Columns are more interpretable than just ASV IDs. 
+# Extract the Feature.ID column from the Taxonomy data frame
+taxonomy_feature_ids <- taxonomy$ASV
+
+# Extract the Order column from the Taxonomy data frame
+taxonomy_order <- taxonomy$Order
+
+
+# Remove X's in ASV IDs. 
+colnames(ASV_Percent_Disease)[31:ncol(ASV_Percent_Disease)] <- gsub("^X", "", colnames(ASV_Percent_Disease)[31:ncol(ASV_Percent_Disease)])
+
+# Find the indices of matching Feature IDs in ASV_Percent_Disease
+matching_indices <- match(colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)], taxonomy_feature_ids)
+
+# Create new column names with both "Order" and "Feature.ID"
+new_colnames <- ifelse(!is.na(matching_indices), paste(taxonomy_order[matching_indices], taxonomy_feature_ids[matching_indices], sep = "_"), colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)])
+colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)] <- new_colnames
+
+# Remove X's in ASV IDs. 
+colnames(ASV_Percent_Controls)[31:ncol(ASV_Percent_Controls)] <- gsub("^X", "", colnames(ASV_Percent_Controls)[31:ncol(ASV_Percent_Controls)])
+
+# Find the indices of matching Feature IDs in ASV_Percent_Controls
+matching_indices <- match(colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)], taxonomy_feature_ids)
+
+# Create new column names with both "Order" and "Feature.ID"
+new_colnames <- ifelse(!is.na(matching_indices), paste(taxonomy_feature_ids[matching_indices], taxonomy_order[matching_indices],  sep = "_"), colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)])
+colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)] <- new_colnames
+
+```
+
+## Stack Bar Plot - By ASV
+```{r}
+#Stacked bar plot. 
+##ASV - Controls 1% Abundance
+df_Type_ASV_Controls <- ASV_Percent_Controls
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Controls$RGroup.all.genotypes.but.5.clusters)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Controls <- df_Type_ASV_Controls %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Controls <- colMax(df_ASV_Controls[,15:length(df_ASV_Controls)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls>1] #return any max that is >1
+other_ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls<1]
+df._ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(max._ASV_Controls))] #take the data and only return cols that are found in max.3
+other.df_ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(other_ASV_Controls))]
+other.sum_ASV_Controls <- rowSums(other.df_ASV_Controls)
+df.new_ASV_Controls <- cbind(data.frame(df_ASV_Controls[,1]), data.frame(df._ASV_Controls), data.frame(other.sum_ASV_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Controls <- df_Type_ASV_Controls[names(df_Type_ASV_Controls) %in% names(df.new_ASV_Controls)] %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls.csv")
+write.csv(df_se_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_ASV_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+reshaped_SE_Controls <- df_se_ASV_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters)
+species.percentage_Controls$RGroup.all.genotypes.but.5.clusters <- factor(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters, levels = c("1/1 Resistant","Resistant","Intermediate","Susceptible","Highly Susceptible"))
+
+stacked_Controls_1 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = RGroup.all.genotypes.but.5.clusters, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "RGroup.all.genotypes.but.5.clusters", y = "Relative Abundance (%)", title = "Controls Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_1
+
+
+
+
+##ASV - Controls 3% Abundance
+df_Type_ASV_Controls <- ASV_Percent_Controls
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Controls$RGroup.all.genotypes.but.5.clusters)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Controls <- df_Type_ASV_Controls %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Controls <- colMax(df_ASV_Controls[,17:length(df_ASV_Controls)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls>3] #return any max that is >3
+other_ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls<3]
+df._ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(max._ASV_Controls))] #take the data and only return cols that are found in max.3
+other.df_ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(other_ASV_Controls))]
+other.sum_ASV_Controls <- rowSums(other.df_ASV_Controls)
+df.new_ASV_Controls <- cbind(data.frame(df_ASV_Controls[,1]), data.frame(df._ASV_Controls), data.frame(other.sum_ASV_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Controls <- df_Type_ASV_Controls[names(df_Type_ASV_Controls) %in% names(df.new_ASV_Controls)] %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls.csv")
+write.csv(df_se_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_ASV_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+reshaped_SE_Controls <- df_se_ASV_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters)
+species.percentage_Controls$RGroup.all.genotypes.but.5.clusters <- factor(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters, levels = c("1/1 Resistant","Resistant","Intermediate","Susceptible","Highly Susceptible"))
+
+stacked_Controls_3 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = RGroup.all.genotypes.but.5.clusters, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "RGroup.all.genotypes.but.5.clusters", y = "Relative Abundance (%)", title = "Controls Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_3
+
+stacked_Controls_1
+
+```
+## Stack Bar Plot - By Order
+```{r}
+#### Controls By Order
+# Group by "Order" before calculating percent abundance
+# Remove X's in ASV IDs. 
+colnames(merged_data_C)[31:ncol(merged_data_C)] <- gsub("^X", "", colnames(merged_data_C)[31:ncol(merged_data_C)])
+
+Controls_ASV <- t(merged_data_C[,31:length(merged_data_C)])
+colnames(Controls_ASV) <- merged_data_C$DEPSampleID
+Controls_ASV <- as.data.frame(Controls_ASV)
+Controls_ASV$ASV <- rownames(Controls_ASV)
+
+# Add taxonomic ranks
+Controls_ASV <- merge(taxonomy,Controls_ASV,by="ASV")
+#keep only order for this part. 
+Controls_ASV <- Controls_ASV[,c(5,7:length(Controls_ASV))]
+
+sample_columns <- colnames(Controls_ASV)[2:ncol(Controls_ASV)]
+
+
+# Group by "Order" and summarize for each sample column
+collapsed_df <- Controls_ASV %>%
+  group_by(Order) %>%
+  summarise(across(all_of(sample_columns), sum, na.rm = TRUE))
+Controls_Order <- t(collapsed_df)
+Controls_Order <- as.data.frame(Controls_Order)
+colnames(Controls_Order) <- Controls_Order[1,]
+Controls_Order <- Controls_Order[-1,]
+Controls_Order$DEPSampleID <- rownames(Controls_Order)
+Controls_Order <- merge(merged_data_C[,1:30],Controls_Order,by="DEPSampleID")
+# removing random spaces incorporated into count values. 
+for (i in 31:ncol(Controls_Order)) {
+  Controls_Order[, i] <- as.numeric(gsub("\\s+", "", Controls_Order[, i]))
+}
+
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts_Controls_Order <- rowSums(Controls_Order[,31:length(Controls_Order)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance_Controls_Order <- ((Controls_Order[,31:length(Controls_Order)]) / total_counts_Controls_Order) * 100
+
+# Combine with metadata
+ASV_Percent_Controls_Order <- cbind(Controls_Order[,1:30], percent_abundance_Controls_Order)
+
+
+
+
+
+#Stacked bar plot. 
+##Order - Controls 1% Abundance
+df_Type_Order_Controls <- ASV_Percent_Controls_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Controls$RGroup.all.genotypes.but.5.clusters)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Controls <- df_Type_Order_Controls %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Controls <- colMax(df_Order_Controls[,15:length(df_Order_Controls)]) #use the fxn on the numeric cols in the data
+
+max._Order_Controls <- colmax_Order_Controls[colmax_Order_Controls>1] #return any max that is >1
+other_Order_Controls <- colmax_Order_Controls[colmax_Order_Controls<1]
+df._Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(max._Order_Controls))] #take the data and only return cols that are found in max.3
+other.df_Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(other_Order_Controls))]
+other.sum_Order_Controls <- rowSums(other.df_Order_Controls)
+df.new_Order_Controls <- cbind(data.frame(df_Order_Controls[,1]), data.frame(df._Order_Controls), data.frame(other.sum_Order_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Controls <- df_Type_Order_Controls[names(df_Type_Order_Controls) %in% names(df.new_Order_Controls)] %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Controls, file="BacterialSpecies_byGenotypeSusceptibility>3%_Controls.csv")
+write.csv(df_se_Order_Controls, file="BacterialSpecies_byGenotypeSusceptibility>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_Order_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+reshaped_SE_Controls <- df_se_Order_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters)
+species.percentage_Controls$RGroup.all.genotypes.but.5.clusters <- factor(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters, levels = c("1/1 Resistant","Resistant","Intermediate","Susceptible","Highly Susceptible"))
+
+stacked_Controls_1 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = RGroup.all.genotypes.but.5.clusters, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "RGroup.all.genotypes.but.5.clusters", y = "Relative Abundance (%)", title = "Controls Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_1
+
+
+
+
+##Order - Controls 3% Abundance
+df_Type_Order_Controls <- ASV_Percent_Controls_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Controls$RGroup.all.genotypes.but.5.clusters)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Controls <- df_Type_Order_Controls %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Controls <- colMax(df_Order_Controls[,15:length(df_Order_Controls)]) #use the fxn on the numeric cols in the data
+
+max._Order_Controls <- colmax_Order_Controls[colmax_Order_Controls>3] #return any max that is >3
+other_Order_Controls <- colmax_Order_Controls[colmax_Order_Controls<3]
+df._Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(max._Order_Controls))] #take the data and only return cols that are found in max.3
+other.df_Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(other_Order_Controls))]
+other.sum_Order_Controls <- rowSums(other.df_Order_Controls)
+df.new_Order_Controls <- cbind(data.frame(df_Order_Controls[,1]), data.frame(df._Order_Controls), data.frame(other.sum_Order_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Controls <- df_Type_Order_Controls[names(df_Type_Order_Controls) %in% names(df.new_Order_Controls)] %>% group_by(RGroup.all.genotypes.but.5.clusters) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls.csv")
+write.csv(df_se_Order_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_Order_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+reshaped_SE_Controls <- df_se_Order_Controls %>%
+  pivot_longer(cols=-RGroup.all.genotypes.but.5.clusters,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,RGroup.all.genotypes.but.5.clusters)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters)
+species.percentage_Controls$RGroup.all.genotypes.but.5.clusters <- factor(species.percentage_Controls$RGroup.all.genotypes.but.5.clusters, levels = c("1/1 Resistant","Resistant","Intermediate","Susceptible","Highly Susceptible"))
+
+stacked_Controls_3 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = RGroup.all.genotypes.but.5.clusters, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "RGroup.all.genotypes.but.5.clusters", y = "Relative Abundance (%)", title = "Controls Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_3
+
+stacked_Controls_1
+
+```
+
+# ANCOM-BCII
+```{r}
+# Load Libraries
+library(phyloseq)
+library(dplyr)
+library(ANCOMBC)
+library(nloptr)
+library(tidyverse)
+library(DT)
+```
+
+```{r}
+#Create Phyloseq Object
+
+#to put the taxonomy in the right format
+taxonomy_ps <- taxonomy
+rownames(taxonomy_ps) <- taxonomy_ps[,1]
+taxonomy_ps <- taxonomy_ps[,-1]
+
+duplicates <- merged_data$DEPSampleID[duplicated(merged_data$DEPSampleID)]
+merged_data <- merged_data[!duplicated(merged_data$DEPSampleID), ]
+
+
+
+
+
+
+# All Samples
+
+metadata <- merged_data[,1:30]
+rownames(metadata) <- metadata[,1]
+metadata <- metadata[,-1]
+
+colnames(merged_data)[31:ncol(merged_data)] <- gsub("^X", "", colnames(merged_data)[31:ncol(merged_data)])
+counts.t <- t(merged_data[,31:length(merged_data)])
+colnames(counts.t) <- t(merged_data[,1])
+counts.t <- as.data.frame(counts.t)
+
+otu_table <- otu_table(as.matrix(counts.t), taxa_are_rows = T)
+samples <- sample_data(metadata)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps <- phyloseq(otu_table, TAX, samples)
+ps
+
+tse = mia::makeTreeSummarizedExperimentFromPhyloseq(ps)
+
+# Controls
+
+metadata_C <- merged_data_C[,1:30]
+rownames(metadata_C) <- metadata_C[,1]
+metadata_C <- metadata_C[,-1]
+
+colnames(merged_data_C)[31:ncol(merged_data_C)] <- gsub("^X", "", colnames(merged_data_C)[31:ncol(merged_data_C)])
+counts.t_C <- t(merged_data_C[,31:length(merged_data_C)])
+colnames(counts.t_C) <- t(merged_data_C[,1])
+counts.t_C <- as.data.frame(counts.t_C)
+
+otu_table_C <- otu_table(as.matrix(counts.t_C), taxa_are_rows = T)
+samples_C <- sample_data(metadata_C)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_C <- phyloseq(otu_table_C, TAX, samples_C)
+ps_C
+
+tse_C = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_C)
+
+# Disease
+
+metadata_D <- merged_data_D[,1:30]
+rownames(metadata_D) <- metadata_D[,1]
+metadata_D <- metadata_D[,-1]
+
+colnames(merged_data_D)[31:ncol(merged_data_D)] <- gsub("^X", "", colnames(merged_data_D)[31:ncol(merged_data_D)])
+counts.t_D <- t(merged_data_D[,31:length(merged_data_D)])
+colnames(counts.t_D) <- t(merged_data_D[,1])
+counts.t_D <- as.data.frame(counts.t_D)
+
+otu_table_D <- otu_table(as.matrix(counts.t_D), taxa_are_rows = T)
+samples_D <- sample_data(metadata_D)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_D <- phyloseq(otu_table_D, TAX, samples_D)
+ps_D
+
+tse_D = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_D)
+
+# Disease Healthy
+
+metadata_DH <- merged_data_DH[,1:30]
+rownames(metadata_DH) <- metadata_DH[,1]
+metadata_DH <- metadata_DH[,-1]
+
+colnames(merged_data_DH)[31:ncol(merged_data_DH)] <- gsub("^X", "", colnames(merged_data_DH)[31:ncol(merged_data_DH)])
+counts.t_DH <- t(merged_data_DH[,31:length(merged_data_DH)])
+colnames(counts.t_DH) <- t(merged_data_DH[,1])
+counts.t_DH <- as.data.frame(counts.t_DH)
+
+otu_table_DH <- otu_table(as.matrix(counts.t_DH), taxa_are_rows = T)
+samples_DH <- sample_data(metadata_DH)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_DH <- phyloseq(otu_table_DH, TAX, samples_DH)
+ps_DH
+
+tse_DH = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_DH)
+
+# Disease Diseased
+
+metadata_DD <- merged_data_DD[,1:30]
+rownames(metadata_DD) <- metadata_DD[,1]
+metadata_DD <- metadata_DD[,-1]
+
+colnames(merged_data_DD)[31:ncol(merged_data_DD)] <- gsub("^X", "", colnames(merged_data_DD)[31:ncol(merged_data_DD)])
+counts.t_DD <- t(merged_data_DD[,31:length(merged_data_DD)])
+colnames(counts.t_DD) <- t(merged_data_DD[,1])
+counts.t_DD <- as.data.frame(counts.t_DD)
+
+otu_table_DD <- otu_table(as.matrix(counts.t_DD), taxa_are_rows = T)
+samples_DD <- sample_data(metadata_DD)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_DD <- phyloseq(otu_table_DD, TAX, samples_DD)
+ps_DD
+
+tse_DD = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_DD)
+
+```
+
+```{r}
+
+# Convert mmetadata to dataframe if it's not already
+metadata <- as.data.frame(metadata)
+
+# Define the order of levels for the "timepoint" column
+Susceptibility_levels <- c("Resistant","1/1 Resistant","Intermediate","Susceptible", "Highly Susceptible")
+
+# Reorder levels of timepoint and Treatment
+metadata$RGroup.all.genotypes.but.5.clusters <- factor(metadata$RGroup.all.genotypes.but.5.clusters, levels = Susceptibility_levels)
+
+
+otu_table <- otu_table(as.matrix(counts.t), taxa_are_rows = T)
+samples <- sample_data(metadata)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps <- phyloseq(otu_table, TAX, samples)
+ps
+```
+
+```{r}
+tse = mia::makeTreeSummarizedExperimentFromPhyloseq(ps)
+
+# We want to make sure ANCOM-BC2 knows what our baseline samples are (controls or pre exposure samples). To do this we specify the order of samples, otherwise it refers to alphabetical order so for timepoint that would be early.exposure as the default baseline. 
+unique(tse$timepoint)
+# Discard samples of undesired categories
+tse = tse[, ! tse$timepoint %in% c("Main Frag")]
+unique(tse$timepoint)
+tse$timepoint = factor(tse$timepoint, levels = c("Pre.Exposure","Early.Exposure","Initial.Disease","Final"))
+
+levels(tse$timepoint)
+
+unique(tse$RGroup.all.genotypes.but.5.clusters)
+
+levels(tse$RGroup.all.genotypes.but.5.clusters)
+
+# All Samples - By ASV
+ancombc2_output_Susceptibility_ASV = ancombc2(data = tse, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+
+
+# All Samples - By Order
+ancombc2_output_Susceptibility_Order = ancombc2(data = tse, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+
+```
+
+```{r}
+levels(tse_C$RGroup.all.genotypes.but.5.clusters)
+
+# Controls - By ASV
+ancombc2_output_Susceptibility_C_ASV = ancombc2(data = tse_C, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Controls - By Order
+ancombc2_output_Susceptibility_C_Order = ancombc2(data = tse_C, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+```{r}
+# Disease - By ASV
+ancombc2_output_Susceptibility_D_ASV = ancombc2(data = tse_D, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Disease - By Order
+ancombc2_output_Susceptibility_D_Order = ancombc2(data = tse_D, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+```{r}
+levels(tse_DH$RGroup.all.genotypes.but.5.clusters)
+
+# Disease Healthy - By ASV
+ancombc2_output_Susceptibility_DH_ASV = ancombc2(data = tse_DH, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Disease Healthy - By Order
+ancombc2_output_Susceptibility_DH_Order = ancombc2(data = tse_DH, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+```{r}
+# Disease Diseased - By ASV
+ancombc2_output_Susceptibility_DD_ASV = ancombc2(data = tse_DD, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Disease Diseased - By Order
+ancombc2_output_Susceptibility_DD_Order = ancombc2(data = tse_DD, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "RGroup.all.genotypes.but.5.clusters", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "RGroup.all.genotypes.but.5.clusters", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+```{r}
+## Structural Zeros
+
+# All Samples
+tab_zero = ancombc2_output_Susceptibility$zero_ind
+tab_zero %>% datatable(caption = "The detection of structural zeros")
+
+## Sensitivity Score
+
+# All Samples
+tab_sens = ancombc2_output_Susceptibility$pseudo_sens_tab
+tab_sens %>% datatable(caption = "Sensitivity Scores") %>% formatRound(colnames(tab_sens)[-1], digits = 2)
+
+#ANCOM-BC2 Primary Results
+res_prim_Susceptibility = ancombc2_output_Susceptibility$res
+
+
+# Visualize 
+
+# All samples - By Order - Susceptibility - Resistant 
+# res_prim_Susceptibility
+df_prim = res_prim %>%
+  dplyr::select(taxon, contains("RGroup.all.genotypes.but.5.clusters")) 
+df_fig = df_prim %>%
+  filter("diff_RGroup.all.genotypes.but.5.clustersHighly Susceptible" == 1) %>% 
+  arrange(desc("lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible")) %>%
+  mutate(direct = ifelse("lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible" > 0, "Positive LFC", "Negative LFC"))
+df_fig$taxon = factor(df_fig$taxon, levels = df_fig$taxon)
+df_fig$direct = factor(df_fig$direct, levels = c("Positive LFC", "Negative LFC"))
+
+
+fig = df_fig %>%
+  ggplot(aes(x = taxon, y = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible`, fill = direct)) + 
+  geom_bar(stat = "identity", width = 0.7, color = "black", 
+           position = position_dodge(width = 0.4)) +
+  geom_errorbar(aes(ymin = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible` - `se_RGroup.all.genotypes.but.5.clustersHighly Susceptible`, 
+                    ymax = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible` + `se_RGroup.all.genotypes.but.5.clustersHighly Susceptible`), 
+                width = 0.2, position = position_dodge(0.05), color = "black") + 
+  labs(x = NULL, y = "Log fold change", 
+       title = "Log fold changes") + 
+  scale_fill_discrete(name = NULL) +
+  scale_color_discrete(name = NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 8))
+fig
+
+```
+#### ANCOMBC2 File Name Extraction
+```{r}
+
+# This script will read the unique ancombc2 output files and create a list of them so that subsequent ancom steps can loop through those file names. 
+
+# Read the R script file
+script <- readLines("./AnalysisDraftV1.Rmd")
+
+# Define the range of line numbers to examine
+start_line <- 1260  # Adjust this to the starting line number
+end_line <- 1498    # Adjust this to the ending line number
+
+# Define the pattern to match variable names assigned to ancombc2_output objects
+pattern <- 'ancombc2_output_\\w+'
+
+# Extract variable names from the specified lines
+variable_names <- c()
+for (i in start_line:end_line) {
+  line <- script[i]
+  if (grepl(pattern, line)) {
+    matches <- regmatches(line, gregexpr(pattern, line))[[1]]
+    variable_names <- c(variable_names, matches)
+  }
+}
+
+# Get unique variable names
+unique_variable_names <- unique(variable_names)
+
+# Print the unique variable names
+print(unique_variable_names)
+
+```
+
+## ANCOMBC2 Visualization
+```{r}
+
+# This chunk will loop through each unique ancombc2 output file name and visualize the LFC graph.
+
+# Testing the loop with a subset of ancom outputs. 
+# unique_variable_names <- c("ancombc2_output_Susceptibility_C_ASV")
+
+# Loop through each name
+for (variable_name in unique_variable_names) {
+  ## Structural Zeros
+  
+  # All Samples
+  tab_zero <- eval(parse(text = paste0(variable_name, "$zero_ind")))
+  tab_zero <- tab_zero %>% datatable(caption = "The detection of structural zeros")
+  
+  ## Sensitivity Score
+  
+  # All Samples
+  tab_sens <- eval(parse(text = paste0(variable_name, "[['pseudo_sens_tab']]")))
+  tab_sens <- tab_sens %>% datatable(caption = "Sensitivity Scores") %>% formatRound(colnames(tab_sens)[-1], digits = 2)
+  
+  # ANCOM-BC2 Primary Results
+  res_prim <- eval(parse(text = paste0(variable_name, "[['res']]")))
+  
+  # Visualize
+  
+  # All samples - By Order - Susceptibility - Resistant
+  df_prim <- res_prim %>%
+    dplyr::select(taxon, contains("RGroup.all.genotypes.but.5.clusters")) 
+  df_fig <- df_prim %>%
+    filter(diff_RGroup.all.genotypes.but.5.clustersResistant == 1) %>% 
+    arrange(desc(lfc_RGroup.all.genotypes.but.5.clustersResistant)) %>%
+    mutate(direct = ifelse(lfc_RGroup.all.genotypes.but.5.clustersResistant > 0, "Positive LFC", "Negative LFC"))
+  df_fig$taxon <- factor(df_fig$taxon, levels = df_fig$taxon)
+  df_fig$direct <- factor(df_fig$direct, levels = c("Positive LFC", "Negative LFC"))
+  
+  fig <- df_fig %>%
+  ggplot(aes(x = taxon, y = `lfc_RGroup.all.genotypes.but.5.clustersResistant`, fill = direct)) + 
+  geom_bar(stat = "identity", width = 0.5, color = "black", 
+           position = position_dodge(width = 0.46)) +  # Adjusted dodge width
+  geom_errorbar(aes(ymin = `lfc_RGroup.all.genotypes.but.5.clustersResistant` - `se_RGroup.all.genotypes.but.5.clustersResistant`, 
+                    ymax = `lfc_RGroup.all.genotypes.but.5.clustersResistant` + `se_RGroup.all.genotypes.but.5.clustersResistant`), 
+                width = 0.2, position = position_dodge(0.5), color = "black") + 
+  labs(x = NULL, y = "Log fold change", 
+       title = paste0("Log fold change of Resistant Genotypes relative to Highly Susceptible\n", variable_name)) + 
+  scale_fill_discrete(name = NULL) +
+  scale_color_discrete(name = NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+        aspect.ratio = 3/4) #This changes the proportional size between colored bar and the frame of the figure to not be so disproportional
+
+print(fig)
+}
+
+
+```
+
+```{r}
+## Structural Zeros
+
+# All Samples
+tab_zero = ancombc2_output_Susceptibility$zero_ind
+tab_zero %>% datatable(caption = "The detection of structural zeros")
+
+## Sensitivity Score
+
+# All Samples
+tab_sens = ancombc2_output_Susceptibility$pseudo_sens_tab
+tab_sens %>% datatable(caption = "Sensitivity Scores") %>% formatRound(colnames(tab_sens)[-1], digits = 2)
+
+#ANCOM-BC2 Primary Results
+res_prim_Susceptibility = ancombc2_output_Susceptibility$res
+
+
+# Visualize 
+
+# All samples - By Order - Susceptibility - Resistant 
+# res_prim_Susceptibility
+df_prim = res_prim %>%
+  dplyr::select(taxon, contains("RGroup.all.genotypes.but.5.clusters")) 
+df_fig = df_prim %>%
+  filter("diff_RGroup.all.genotypes.but.5.clustersHighly Susceptible" == 1) %>% 
+  arrange(desc("lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible")) %>%
+  mutate(direct = ifelse("lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible" > 0, "Positive LFC", "Negative LFC"))
+df_fig$taxon = factor(df_fig$taxon, levels = df_fig$taxon)
+df_fig$direct = factor(df_fig$direct, levels = c("Positive LFC", "Negative LFC"))
+
+
+fig = df_fig %>%
+  ggplot(aes(x = taxon, y = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible`, fill = direct)) + 
+  geom_bar(stat = "identity", width = 0.7, color = "black", 
+           position = position_dodge(width = 0.4)) +
+  geom_errorbar(aes(ymin = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible` - `se_RGroup.all.genotypes.but.5.clustersHighly Susceptible`, 
+                    ymax = `lfc_RGroup.all.genotypes.but.5.clustersHighly Susceptible` + `se_RGroup.all.genotypes.but.5.clustersHighly Susceptible`), 
+                width = 0.2, position = position_dodge(0.05), color = "black") + 
+  labs(x = NULL, y = "Log fold change", 
+       title = "Log fold changes") + 
+  scale_fill_discrete(name = NULL) +
+  scale_color_discrete(name = NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 8))
+fig
+
+```
