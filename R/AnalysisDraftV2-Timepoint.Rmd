@@ -1,0 +1,2127 @@
+---
+title: "16sMasterDraftV1"
+author: "Nick MacKnight"
+date: "4/22/2024"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Purpose
+
+The purpose of this document is to act as an efficient, streamlined, and comprehensive script to perform 16s analysis.
+
+Stages:
+
+1.) Questions.
+  - Specifically write out the questions that the analysis is intended to address.
+
+2.) Meta analysis curation.
+  - This is a foundational file that any downstream file will be susbsetted from.
+
+3.) Specify the independent variable to be explored. 
+  - This rmarkdown will be associated with a independent variable or a combination of multiple to be explored from start to finish. 
+  - i.e a report will be comparing treatment. a completely separate report will be comparing disease outcome or species. 
+  - However combined reports can be created that combine treatment and species. so lets say you want to compare species in just diesase-exposed treatment. that would be a separate report. This way independent variables stay organized by their separation and you know that independent variable was explored with the comprehensive list of analysis. 
+  
+4.) Analysis to perform
+EVE
+CLR + TSS Normalization
+NMDS
+SIMPER
+Stacked Column
+ANCOM-BCII
+Diversity
+
+# Libraries
+```{r Libraries}
+
+# NMDS
+library(vegan)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+
+# Pairwise Adonis
+#install.packages('devtools')
+library(devtools)
+#install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+
+# Violin Plots
+#install.packages("wesanderson")
+library(tidyverse)
+library(ggthemes)  # for a mapping theme
+#library(ggalt)  # for custom map projections
+library(ggrepel)  # for annotations
+library(viridis)  # for nice colours
+library(broom)  # for cleaning up models
+#devtools::install_github("wilkox/treemapify")
+library(treemapify)  # for making area graphs
+library(wesanderson)  # for nice colours
+#install.packages("cli")
+library(cli)
+library(ggplot2)
+#source("https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R")
+
+```
+
+
+
+# Read in Prepared Files
+```{r read in files}
+counts_metadata_sub <- read.csv("counts_metadata_sub.csv") # Non-Normalized Master File from Prep.Rm
+counts_metadata_sub <- counts_metadata_sub[,-1] # Removing the first row which is of X 1,2,3,etc and added in during the read.csv stage
+```
+
+# Normalization
+There are several ways to normalize 16s data and each microbial ecologist is willing to defend their method as the only conceivable way and declare others as completely ridiculous and only a fool would disagree with them. Id like to put them all in a room. For science.
+
+So, I will consider different normalization strategies. I, am in favor of total sum scaling TSS, or proportional normalization. Lets say a sample has 10,000 reads in total and I want to normalize all samples to 5,000 reads per sample as I have determined through my rarefaction graphing that 5,000 is the lower quartile read depth and around where I capture the most unique ASVs while retaining the most samples. Anyways, TSS normalization will scale the 10,000 read sample to 5,000 reads and effectively cut the reads across all samples in half so that read depth is not a bias and multiple samples can be fairly compared. To me this makes the most sense in my head relative to other normalization methods. What I recommend is you go with what your advisor favors/has used in the past. If you are in the position to consider your preference, I recommend you explore whats out there, and apply these methods with your data to get an appreciation and go from there. 
+```{r TSS Normalization}
+# This is the proportional normalization function.
+# In a more detailed explanation of how this function works, it will consider the cut off read depth, defined outside this function as "minimum_row_sum". It looks at a coral sample and the read depth across all bacteria. It ranks this read depth from 1 to the total read depth for that sample. So lets say ASV1 has a read depth of 10 and the second ASV2 has a read depth of 50. The function will give positional assignment of numbers 1-10 to ASV1 and 11-51 to ASV2 and so on for all ASVs and their read depth. Then, it will randomly select a number the number of times equal to the desired cutoff read depth. This way, the more reads an ASV has, the greater chance the randomly selected number is one that was assigned to that ASV. As a result, the normalization that occurs is proportional to the original read depth, where ASVs with higher read depth will likely be higher than those that originally had lower read depth, but now the read depth across all samples is the same, and normalized for comparison. This is similar to rarefaction, however rarefaction simply randomly selects  numbers, this proportional normalization assigns that positional number so the random samply is relative to the original read depth. 
+
+## Initially takes in a row of the data and the number of samples to take.
+sample_species <- function(counts,n) {
+  num_species <- length(counts)
+  total_count <- sum(counts)
+  samples <- sample(1:total_count,n,replace=FALSE)
+  samples <- samples[order(samples)]
+  result <- array(0,num_species)
+  total <- 0
+  for (i in 1:num_species) {
+    result[i] <- length(which(samples > total & samples <= total+counts[i]))
+    total <- total+counts[i]
+  }
+  return(result)
+}
+
+# Find the minimum row sum
+subset_rows <- counts_metadata_sub[,31:length(counts_metadata_sub)]
+row_sums <- rowSums(subset_rows)
+minimum_row_sum <- min(row_sums)
+
+
+countsn <- t(apply(counts_metadata_sub[31:length(counts_metadata_sub)], 1, sample_species,minimum_row_sum))
+
+
+
+#Add Back Metadata and Bacteria Annotations. 
+ASV <- as.data.frame(countsn)
+selected_columns <- counts_metadata_sub[, 1:30]
+ASV_merged <- cbind(selected_columns, ASV)
+colnames(ASV_merged) <- colnames(counts_metadata_sub)
+
+```
+
+# Identify Levels of IV1
+```{r, IV1 Levels}
+merged_data <- ASV_merged
+#merged_data <- read.csv("Ofav SCTLD EVE/merged_data.csv")
+dim(merged_data)
+head(merged_data)
+#merged_data <- merged_data[,-1] # remove the first column 
+rowSums(merged_data[,31:length(merged_data)]) # should be  5152
+
+# Define the order of levels for the "5 timepoint Cluster" column
+unique(merged_data$timepoint)
+timepoint_levels <- c("Pre.Exposure","Early.Exposure","Initial.Disease","Final")
+
+merged_data$timepoint <- factor(merged_data$timepoint, levels = timepoint_levels)
+
+# Omit NA values in the specified column
+merged_data <- merged_data[!is.na(merged_data$timepoint), ]
+
+
+# Define the order of levels for the "5 timepoint Cluster" column
+unique(counts_metadata_sub$timepoint)
+timepoint_levels <- c("Pre.Exposure","Early.Exposure","Initial.Disease","Final")
+
+counts_metadata_sub$timepoint <- factor(counts_metadata_sub$timepoint, levels = timepoint_levels)
+
+# Omit NA values in the specified column
+counts_metadata_sub <- counts_metadata_sub[!is.na(counts_metadata_sub$timepoint), ]
+
+
+```
+
+# Treatment Specific metadata files
+```{r subset merged_data}
+merged_data_C <- merged_data[merged_data$Treatment == "C", ] # 597 samples
+merged_data_D <- merged_data[merged_data$Treatment == "D", ] # 646 samples
+
+# For alpha diversity only
+counts_metadata_sub_C <- counts_metadata_sub[counts_metadata_sub$Treatment == "C", ] # 597 samples
+counts_metadata_sub_D <- counts_metadata_sub[counts_metadata_sub$Treatment == "D", ] # 646 samples
+
+
+
+```
+
+```{r}
+dim(merged_data_C)
+dim(merged_data_D)
+dim(counts_metadata_sub_C)
+dim(counts_metadata_sub_D)
+
+dim(counts_metadata_sub)
+dim(merged_data)
+```
+
+```{r NMDS, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS=metaMDS(merged_data[31:length(merged_data)])
+NMDS$stress #0.2186129
+attach(NMDS)
+stressplot(NMDS)
+```
+
+
+```{r NMDS Display, echo=FALSE}
+ordiplot(NMDS)
+
+# By timepoint
+cols <- c("darkseagreen","cornflowerblue", "salmon","red3","cornflowerblue",  "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(16, 16,15,18)
+ordiplot(NMDS, display="sites", cex =0.1)
+points(NMDS,col=cols[as.factor(merged_data$timepoint)],pch=pchs[as.factor(merged_data$timepoint)],cex=0.5)
+ordiellipse(NMDS,groups=merged_data$timepoint, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data$timepoint), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+
+```
+
+```{r NMDS-C, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS_C=metaMDS(merged_data_C[31:length(merged_data_C)])
+NMDS_C$stress #0.2163024
+attach(NMDS_C)
+stressplot(NMDS_C)
+```
+```{r NMDS-C Display, echo=FALSE}
+ordiplot(NMDS_C)
+
+# By timepoint
+cols <- c("red3","salmon","cornflowerblue", "darkseagreen", "palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+ordiplot(NMDS_C, display="sites", cex =0.1)
+points(NMDS_C,col=cols[as.factor(merged_data_C$timepoint)],pch=pchs[as.factor(merged_data_C$timepoint)],cex=0.5)
+ordiellipse(NMDS_C,groups=merged_data_C$timepoint, label=T,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_C$timepoint), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+```
+
+```{r NMDS-D, echo=FALSE, cache=TRUE}
+library(vegan)
+NMDS_D=metaMDS(merged_data_D[31:length(merged_data_D)])
+NMDS_D$stress #0.2151051
+attach(NMDS_D)
+stressplot(NMDS_D)
+```
+```{r NMDS_plot, fig.show='as.is', echo=FALSE}
+ordiplot(NMDS_D)
+
+# By timepoint
+
+cols <- c("darkseagreen","cornflowerblue","salmon","#9564F2","palegreen", "cornflowerblue", "chartreuse","deepskyblue2")
+pchs=c(18,18,15,16,16)
+
+
+ordiplot(NMDS_D, display="sites", cex =0.1)
+points(NMDS_D,col=cols[as.factor(merged_data_D$timepoint)],pch=pchs[as.factor(merged_data_D$timepoint)],cex=0.5)
+ordiellipse(NMDS_D,groups=merged_data_D$timepoint, label=F,lty=1,lwd=1,col=cols,draw = "lines",alpha=100)
+legend(x="topright", legend=levels(merged_data_D$timepoint), col=cols, pch = pchs) #box.lty=0 removes legen border b
+
+# Save the plot as a PDF file
+ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/NMDS_D.pdf", plot = NMDS_plot(),width = 8, height = 6, units = "in")
+```
+
+
+# SIMPER
+```{r SIMPER, cache=TRUE}
+library(vegan)
+
+# Controls Only - Comparing timepoint
+simper.C.timepoint=simper(merged_data_C[,31:length(merged_data_C)],merged_data_C$timepoint)
+simper.C.timepoint
+
+# Disease Only - Comparing timepoint
+simper.D.timepoint=simper(merged_data_D[,31:length(merged_data_D)],merged_data_D$timepoint)
+simper.D.timepoint
+```
+
+# PERMANOVA
+```{r PERMANOVA, cache=TRUE}
+# >  Run time: ~7 min 
+adonis_C_timepoint <- adonis2(merged_data_C[31:length(merged_data_C)]~timepoint, data=merged_data_C, permutations=10000) #9.999e-05 ***
+adonis_C_timepoint
+
+adonis_D_timepoint <- adonis2(merged_data_D[31:length(merged_data_D)]~timepoint, data=merged_data_D, permutations=10000) #9.999e-05 ***
+adonis_D_timepoint
+```
+
+# Pairwise PERMANOVA
+```{r Pairwise PERMANOVA, cache=TRUE}
+
+# timepoint
+Padonis_C_timepoint <- pairwise.adonis(merged_data_C[31:length(merged_data_C)],merged_data_C$timepoint) # 
+Padonis_C_timepoint # Intermediates still sigdiff from everyone but now Resistant category has sigdiff with everyone, even 1/1 Resistant
+
+# timepoint
+Padonis_D_timepoint <- pairwise.adonis(merged_data_D[31:length(merged_data_D)],merged_data_D$timepoint) # 
+Padonis_D_timepoint
+```
+
+# Diversity Indices
+```{r shannon}
+# Shannon (alpha) diversity
+# Non-normalized data are ideal for alpha diversity.
+counts_metadata_sub
+H=diversity(counts_metadata_sub[,31:length(counts_metadata_sub)])
+H_C=diversity(counts_metadata_sub_C[,31:length(counts_metadata_sub_C)])
+H_D=diversity(counts_metadata_sub_D[,31:length(counts_metadata_sub_D)])
+# H_C=diversity(merged_data_C[,31:length(merged_data_C)])
+
+```
+## Pielous Evenness
+```{r Pielou}
+# Pielous Evenness
+J=H/log(specnumber(merged_data[,31:length(merged_data)]))
+J_C=H_C/log(specnumber(merged_data_C[,31:length(merged_data_C)]))
+J_D=H_D/log(specnumber(merged_data_D[,31:length(merged_data_D)]))
+```
+## Simpson
+```{r Simpson}
+# Simpson
+S <- diversity(merged_data[,31:length(merged_data)], index="simpson")
+S_C <- diversity(merged_data_C[,31:length(merged_data_C)], index="simpson")
+S_D <- diversity(merged_data_D[,31:length(merged_data_D)], index="simpson")
+```
+## Inverse Simpson
+```{r Inverse Simpson}
+# Inverse Simpson
+IS <- diversity(merged_data[,31:length(merged_data)], index="invsimpson")
+IS_C <- diversity(merged_data_C[,31:length(merged_data_C)], index="invsimpson")
+IS_D <- diversity(merged_data_D[,31:length(merged_data_D)], index="invsimpson")
+```
+
+## Beta Diversity
+```{r beta}
+#beta diversity by Site by abundance data (could try by presence or absence)
+
+library(betapart)
+
+dist<-bray.part(merged_data[,31:length(merged_data)])
+bd<-betadisper(dist[[3]],merged_data$timepoint)
+bd
+beta <- bd$distances
+
+# Controls
+dist_C<-bray.part(merged_data_C[,31:length(merged_data_C)])
+bd_C<-betadisper(dist_C[[3]],merged_data_C$timepoint)
+bd_C
+beta_C <- bd_C$distances
+
+# Disease
+dist_D<-bray.part(merged_data_D[,31:length(merged_data_D)])
+bd_D<-betadisper(dist_D[[3]],merged_data_D$timepoint)
+bd_D
+beta_D <- bd_D$distances
+
+
+```
+
+## Combine Diversity Metrics into one data frame.
+```{r Diversity df}
+D.diversity <- cbind(merged_data[,1:30],H,J,S, IS,beta)
+D.diversity_C <- cbind(merged_data_C[,1:30], H_C,J_C,S_C, IS_C,beta_C)
+D.diversity_D <- cbind(merged_data_D[,1:30], H_D,J_D,S_D, IS_D,beta_D)
+```
+
+## Diversity Normality
+```{r shapiro normality}
+#Testing for normality. A pvalue <0.05 means significant deviation from normal data. ie. its not normally distributed data.
+shapiro.test(D.diversity_C$H_C)#
+shapiro.test(D.diversity_C$J_C)#
+shapiro.test(D.diversity_C$S_C)#
+shapiro.test(D.diversity_C$IS_C)#
+shapiro.test(D.diversity_C$beta_C)#
+```
+
+## Diversity Sigdiff
+```{r kruskal}
+# Assuming D.diversity is your data frame
+D.diversity_temp <- D.diversity %>%
+  filter(!Final.State %in% c("Watch", NA))
+
+# Print the updated data frame
+print(D.diversity_temp)
+
+
+kruskal.test(H~Treatment,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J~Treatment,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S~Treatment,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS~Treatment,data=D.diversity_temp)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta~Treatment,data=D.diversity_temp)# 
+
+kruskal.test(H~Final.State,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J~Final.State,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S~Final.State,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS~Final.State,data=D.diversity_temp)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta~Final.State,data=D.diversity_temp)# 
+
+
+kruskal.test(H~timepoint,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J~timepoint,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S~timepoint,data=D.diversity_temp)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS~timepoint,data=D.diversity_temp)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta~timepoint,data=D.diversity_temp)# 
+
+kruskal.test(H_C~timepoint,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_C~timepoint,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_C~timepoint,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_C~timepoint,data=D.diversity_C)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_C~timepoint,data=D.diversity_C)# 
+
+
+
+kruskal.test(H_D~timepoint,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_D~timepoint,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_D~timepoint,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_D~timepoint,data=D.diversity_D)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_D~timepoint,data=D.diversity_D)# 
+
+
+kruskal.test(H~RGroup.all.genotypes.but.5.clusters,data=D.diversity)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J~RGroup.all.genotypes.but.5.clusters,data=D.diversity)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S~RGroup.all.genotypes.but.5.clusters,data=D.diversity)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS~RGroup.all.genotypes.but.5.clusters,data=D.diversity)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta~RGroup.all.genotypes.but.5.clusters,data=D.diversity)# 
+
+kruskal.test(H_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_C~RGroup.all.genotypes.but.5.clusters,data=D.diversity_C)# 
+
+
+kruskal.test(H_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 4.4541, df = 4, p-value = 0.348
+kruskal.test(J_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.3661, df = 4, p-value = 0.4985
+kruskal.test(S_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)   # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(IS_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)  # Kruskal-Wallis chi-squared = 3.8658, df = 4, p-value = 0.4245
+kruskal.test(beta_D~RGroup.all.genotypes.but.5.clusters,data=D.diversity_D)# 
+
+```
+
+## Diversity Box and Whisker Plots
+```{r Diversity Box and Whisker Controls Only}
+unique(D.diversity$timepoint)
+
+library(ggplot2)
+# Create a new variable that combines timepoint and Treatment
+D.diversity$time_treatment <- interaction(D.diversity$timepoint, D.diversity$Treatment)
+unique(D.diversity$time_treatment)
+time_treatment_levels <- c("Pre.Exposure.C","Pre.Exposure.D","Early.Exposure.C","Early.Exposure.D","Initial.Disease.C","Initial.Disease.D","Final.C","Final.D")
+D.diversity$time_treatment <- factor(D.diversity$time_treatment, levels = time_treatment_levels)
+
+
+# Plot
+distributionsH <- 
+  ggplot(data = D.diversity, 
+         aes(x = time_treatment, y = H, fill = timepoint)) +
+  geom_point(aes(y = H, color = timepoint), 
+             position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.4, outlier.shape = NA, alpha = 0.5, position = position_dodge(width = 0.75)) +
+  labs(y = "Shannon Diversity", x = "Timepoint and Treatment") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font sizes
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2"))
+
+
+distributionsJ <- 
+  ggplot(data = D.diversity, 
+         aes(x = time_treatment, y = J, fill = timepoint)) +
+  geom_point(aes(y = J, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Pielous Evenness", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsS <- 
+  ggplot(data = D.diversity, 
+         aes(x = time_treatment, y = S, fill = timepoint)) +
+  geom_point(aes(y = S, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Simpson Diversity", x = "timepoint") +
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsIS <- 
+  ggplot(data = D.diversity, 
+         aes(x = time_treatment, y = IS, fill = timepoint)) +
+  geom_point(aes(y = IS, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Inverse Simpson", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsB <- 
+  ggplot(data = D.diversity, 
+         aes(x = time_treatment, y = beta, fill = timepoint)) +
+  geom_point(aes(y = beta, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Beta Diversity", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+library(patchwork)
+distributionsH + distributionsJ + distributionsS + distributionsB #+ distributionsHraw
+
+Timepoint_diversity <- distributionsH + distributionsJ + distributionsS + distributionsB
+#ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/Timepoint_diversity.pdf", plot =Timepoint_diversity, device="pdf")
+```
+
+```{r Diversity Box and Whisker Controls Only}
+unique(D.diversity_C$timepoint)
+D.diversity_C$timepoint <- factor(D.diversity_C$timepoint, levels = timepoint_levels)
+
+library(ggplot2)
+distributionsH_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = timepoint, y = H_C, fill = timepoint)) +
+  geom_point(aes(y = H_C, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Shannon Diversity", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font sizes
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2"))
+
+distributionsJ_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = timepoint, y = J_C, fill = timepoint)) +
+  geom_point(aes(y = J_C, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Pielous Evenness", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsS_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = timepoint, y = S_C, fill = timepoint)) +
+  geom_point(aes(y = S_C, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Simpson Diversity", x = "timepoint") +
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsIS_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = timepoint, y = IS_C, fill = timepoint)) +
+  geom_point(aes(y = IS_C, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Inverse Simpson", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsB_C <- 
+  ggplot(data = D.diversity_C, 
+         aes(x = timepoint, y = beta_C, fill = timepoint)) +
+  geom_point(aes(y = beta_C, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Beta Diversity", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+library(patchwork)
+distributionsH_C + distributionsJ_C + distributionsS_C + distributionsB_C #+ distributionsH_Craw
+```
+```{r Diversity Box and Whisker Disease Only}
+unique(D.diversity_D$timepoint)
+D.diversity_D$timepoint <- factor(D.diversity_D$timepoint, levels = timepoint_levels)
+
+library(ggplot2)
+distributionsH_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = timepoint, y = H_D, fill = timepoint)) +
+  geom_point(aes(y = H_D, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Shannon Diversity", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font sizes
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999", "#B19CD9","#9564F2"))
+
+distributionsJ_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = timepoint, y = J_D, fill = timepoint)) +
+  geom_point(aes(y = J_D, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Pielous Evenness", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsS_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = timepoint, y = S_D, fill = timepoint)) +
+  geom_point(aes(y = S_D, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Simpson Diversity", x = "timepoint") +
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsIS_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = timepoint, y = IS_D, fill = timepoint)) +
+  geom_point(aes(y = IS_D, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Inverse Simpson", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+
+distributionsB_D <- 
+  ggplot(data = D.diversity_D, 
+         aes(x = timepoint, y = beta_D, fill = timepoint)) +
+  geom_point(aes(y = beta_D, color = timepoint), 
+             position = position_jitter(width = 0.15), size = 2, alpha = 1) +
+  # The boxplots
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +
+  labs(y = "Beta Diversity", x = "timepoint") + 
+  theme(legend.position = "none",       # Hide the legend
+        axis.title.x = element_blank(),  # Hide the x-axis title
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12)) +  # Increase x-axis label font size
+  scale_fill_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2")) +
+  scale_colour_manual(values = c("#118C4F", "#6fa8dc", "#ea9999",  "#B19CD9","#9564F2"))
+library(patchwork)
+distributionsH_D + distributionsJ_D + distributionsS_D + distributionsB_D #+ distributionsH_Draw
+```
+## Stacked Column Graph
+```{r,Stacked Column Graph Control}
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts <- rowSums(merged_data_C[,31:length(merged_data_C)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance <- ((merged_data_C[,31:length(merged_data_C)]) / total_counts) * 100
+
+# Identify columns with any cell greater than or equal to 0.03
+selected_columns_C <- colSums(percent_abundance[,31:length(percent_abundance)] >= 3) > 0
+
+# Subset the original data frame to retain only selected columns
+filtered_asv_data_C <- percent_abundance[, selected_columns_C]
+
+# Combine with metadata
+ASV_Percent_Controls <- cbind(merged_data_C[,1:30], filtered_asv_data_C)
+
+```
+
+```{r,Stacked Column Graph Disease}
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts <- rowSums(merged_data_D[,31:length(merged_data_D)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance_D <- ((merged_data_D[,31:length(merged_data_D)]) / total_counts) * 100
+
+# Identify columns with any cell greater than or equal to 0.03
+selected_columns_D <- colSums(percent_abundance_D[,31:length(percent_abundance_D)] >= 3) > 0
+
+# Subset the original data frame to retain only selected columns
+filtered_asv_data_D <- percent_abundance_D[, selected_columns_D]
+
+# Combine with metadata
+ASV_Percent_Disease <- cbind(merged_data_D[,1:30], filtered_asv_data_D)
+```
+
+```{r taxonomy format}
+mytheme <- theme(legend.position= "right", 
+                 legend.text=element_text(size=8), 
+                 legend.title = element_text(size=10), 
+                 #legend.position = "none",
+                 axis.text.x =element_text(colour = "black", size=12,angle = 90, hjust = 1), #element_blank(),
+                 axis.text.y = element_text(colour = "black", size=12), 
+                 axis.title.x = element_text(size=14), 
+                 axis.title.y = element_text(size=14), 
+                 strip.text.x = element_text(colour = "black", size = 8),
+                 axis.ticks.x = element_blank() 
+)
+
+
+# Rename ASVs by their Order ID so that Stacked Columns are more interpretable than just ASV IDs. 
+# Extract the Feature.ID column from the Taxonomy data frame
+taxonomy_feature_ids <- taxonomy$ASV
+
+# Extract the Order column from the Taxonomy data frame
+taxonomy_order <- taxonomy$Order
+
+
+# Remove X's in ASV IDs. 
+colnames(ASV_Percent_Disease)[31:ncol(ASV_Percent_Disease)] <- gsub("^X", "", colnames(ASV_Percent_Disease)[31:ncol(ASV_Percent_Disease)])
+
+# Find the indices of matching Feature IDs in ASV_Percent_Disease
+matching_indices <- match(colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)], taxonomy_feature_ids)
+
+# Create new column names with both "Order" and "Feature.ID"
+new_colnames <- ifelse(!is.na(matching_indices), paste(taxonomy_order[matching_indices], taxonomy_feature_ids[matching_indices], sep = "_"), colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)])
+colnames(ASV_Percent_Disease)[31:length(ASV_Percent_Disease)] <- new_colnames
+
+# Remove X's in ASV IDs. 
+colnames(ASV_Percent_Controls)[31:ncol(ASV_Percent_Controls)] <- gsub("^X", "", colnames(ASV_Percent_Controls)[31:ncol(ASV_Percent_Controls)])
+
+# Find the indices of matching Feature IDs in ASV_Percent_Controls
+matching_indices <- match(colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)], taxonomy_feature_ids)
+
+# Create new column names with both "Order" and "Feature.ID"
+new_colnames <- ifelse(!is.na(matching_indices), paste(taxonomy_feature_ids[matching_indices], taxonomy_order[matching_indices],  sep = "_"), colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)])
+colnames(ASV_Percent_Controls)[31:length(ASV_Percent_Controls)] <- new_colnames
+
+```
+
+## Stack Bar Plot - By ASV
+```{r Stacked column By ASV }
+#Stacked bar plot. 
+##ASV - Controls 1% Abundance
+df_Type_ASV_Controls <- ASV_Percent_Controls
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Controls$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Controls <- df_Type_ASV_Controls %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Controls <- colMax(df_ASV_Controls[,15:length(df_ASV_Controls)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls>1] #return any max that is >1
+other_ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls<1]
+df._ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(max._ASV_Controls))] #take the data and only return cols that are found in max.3
+other.df_ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(other_ASV_Controls))]
+other.sum_ASV_Controls <- rowSums(other.df_ASV_Controls)
+df.new_ASV_Controls <- cbind(data.frame(df_ASV_Controls[,1]), data.frame(df._ASV_Controls), data.frame(other.sum_ASV_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Controls <- df_Type_ASV_Controls[names(df_Type_ASV_Controls) %in% names(df.new_ASV_Controls)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls.csv")
+write.csv(df_se_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_ASV_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Controls <- df_se_ASV_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$timepoint)
+species.percentage_Controls$timepoint <- factor(species.percentage_Controls$timepoint, levels = timepoint_levels)
+
+stacked_Controls_1 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Controls Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_1
+
+
+
+
+##ASV - Controls 3% Abundance
+df_Type_ASV_Controls <- ASV_Percent_Controls
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Controls$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Controls <- df_Type_ASV_Controls %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Controls <- colMax(df_ASV_Controls[,17:length(df_ASV_Controls)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls>3] #return any max that is >3
+other_ASV_Controls <- colmax_ASV_Controls[colmax_ASV_Controls<3]
+df._ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(max._ASV_Controls))] #take the data and only return cols that are found in max.3
+other.df_ASV_Controls <- df_ASV_Controls[,(names(df_ASV_Controls) %in% names(other_ASV_Controls))]
+other.sum_ASV_Controls <- rowSums(other.df_ASV_Controls)
+df.new_ASV_Controls <- cbind(data.frame(df_ASV_Controls[,1]), data.frame(df._ASV_Controls), data.frame(other.sum_ASV_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Controls <- df_Type_ASV_Controls[names(df_Type_ASV_Controls) %in% names(df.new_ASV_Controls)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls.csv")
+write.csv(df_se_ASV_Controls, file="BacterialSpecies_byDisease.Prevalence>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_ASV_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Controls <- df_se_ASV_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$timepoint)
+species.percentage_Controls$timepoint <- factor(species.percentage_Controls$timepoint, levels = timepoint_levels)
+
+stacked_Controls_3 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Controls Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_3
+
+stacked_Controls_1
+
+```
+## Stack Bar Plot - By Order
+```{r Stacked column by Order}
+#### Controls By Order
+# Group by "Order" before calculating percent abundance
+# Remove X's in ASV IDs. 
+colnames(merged_data_C)[31:ncol(merged_data_C)] <- gsub("^X", "", colnames(merged_data_C)[31:ncol(merged_data_C)])
+
+Controls_ASV <- t(merged_data_C[,31:length(merged_data_C)])
+colnames(Controls_ASV) <- merged_data_C$DEPSampleID
+Controls_ASV <- as.data.frame(Controls_ASV)
+Controls_ASV$ASV <- rownames(Controls_ASV)
+
+taxonomy$ASV <- rownames(taxonomy)
+# Add taxonomic ranks
+Controls_ASV <- merge(taxonomy,Controls_ASV,by="ASV")
+#keep only order for this part. 
+Controls_ASV <- Controls_ASV[,c(6,10:length(Controls_ASV))]
+
+sample_columns <- colnames(Controls_ASV)[2:ncol(Controls_ASV)]
+
+
+# Group by "Order" and summarize for each sample column
+collapsed_df <- Controls_ASV %>%
+  group_by(Order) %>%
+  summarise(across(all_of(sample_columns), sum, na.rm = TRUE))
+Controls_Order <- t(collapsed_df)
+Controls_Order <- as.data.frame(Controls_Order)
+colnames(Controls_Order) <- Controls_Order[1,]
+Controls_Order <- Controls_Order[-1,]
+Controls_Order$DEPSampleID <- rownames(Controls_Order)
+Controls_Order <- merge(merged_data_C[,1:30],Controls_Order,by="DEPSampleID")
+# removing random spaces incorporated into count values. 
+for (i in 31:ncol(Controls_Order)) {
+  Controls_Order[, i] <- as.numeric(gsub("\\s+", "", Controls_Order[, i]))
+}
+
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts_Controls_Order <- rowSums(Controls_Order[,31:length(Controls_Order)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance_Controls_Order <- ((Controls_Order[,31:length(Controls_Order)]) / total_counts_Controls_Order) * 100
+
+# Combine with metadata
+ASV_Percent_Controls_Order <- cbind(Controls_Order[,1:30], percent_abundance_Controls_Order)
+
+
+
+
+
+#Stacked bar plot. 
+##Order - Controls 1% Abundance
+df_Type_Order_Controls <- ASV_Percent_Controls_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Controls$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Controls <- df_Type_Order_Controls %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Controls <- colMax(df_Order_Controls[,15:length(df_Order_Controls)]) #use the fxn on the numeric cols in the data
+
+max._Order_Controls <- colmax_Order_Controls[colmax_Order_Controls>1] #return any max that is >1
+other_Order_Controls <- colmax_Order_Controls[colmax_Order_Controls<1]
+df._Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(max._Order_Controls))] #take the data and only return cols that are found in max.3
+other.df_Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(other_Order_Controls))]
+other.sum_Order_Controls <- rowSums(other.df_Order_Controls)
+df.new_Order_Controls <- cbind(data.frame(df_Order_Controls[,1]), data.frame(df._Order_Controls), data.frame(other.sum_Order_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Controls <- df_Type_Order_Controls[names(df_Type_Order_Controls) %in% names(df.new_Order_Controls)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Controls, file="BacterialSpecies_byTimepoint>1%_Controls.csv")
+write.csv(df_se_Order_Controls, file="BacterialSpecies_byTimepoint>1%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_Order_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Controls <- df_se_Order_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$timepoint)
+species.percentage_Controls$timepoint <- factor(species.percentage_Controls$timepoint, levels = timepoint_levels)
+
+stacked_Controls_1 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Controls Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_1
+
+
+
+
+##Order - Controls 3% Abundance
+df_Type_Order_Controls <- ASV_Percent_Controls_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Controls$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Controls <- df_Type_Order_Controls %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Controls <- colMax(df_Order_Controls[,15:length(df_Order_Controls)]) #use the fxn on the numeric cols in the data
+
+max._Order_Controls <- colmax_Order_Controls[colmax_Order_Controls>3] #return any max that is >3
+other_Order_Controls <- colmax_Order_Controls[colmax_Order_Controls<3]
+df._Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(max._Order_Controls))] #take the data and only return cols that are found in max.3
+other.df_Order_Controls <- df_Order_Controls[,(names(df_Order_Controls) %in% names(other_Order_Controls))]
+other.sum_Order_Controls <- rowSums(other.df_Order_Controls)
+df.new_Order_Controls <- cbind(data.frame(df_Order_Controls[,1]), data.frame(df._Order_Controls), data.frame(other.sum_Order_Controls)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Controls <- df_Type_Order_Controls[names(df_Type_Order_Controls) %in% names(df.new_Order_Controls)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Controls, file="BacterialSpecies_byTimepoint>3%_Controls.csv")
+write.csv(df_se_Order_Controls, file="BacterialSpecies_byTimepoint>3%_Controls_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Controls <- df.new_Order_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Controls <- df_se_Order_Controls %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Controls$SE
+missing_bacteria <- setdiff(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Controls$SE to reshaped_data_Controls$SE
+reshaped_data_Controls$SE <- ifelse(reshaped_data_Controls$Bacteria %in% reshaped_SE_Controls$Bacteria,
+                                    reshaped_SE_Controls$SE[match(reshaped_data_Controls$Bacteria, reshaped_SE_Controls$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Controls <- reshaped_data_Controls
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Controls$Bacteria)
+
+include_Controls <- unique_species
+
+unique(species.percentage_Controls$timepoint)
+species.percentage_Controls$timepoint <- factor(species.percentage_Controls$timepoint, levels = timepoint_levels)
+
+stacked_Controls_3 <- ggplot(data = species.percentage_Controls[species.percentage_Controls$Bacteria %in% include_Controls, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Controls Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Controls_3
+
+stacked_Controls_1
+
+```
+## Stack Bar Plot - By ASV
+```{r Stacked column By ASV, fig.height=7.5, fig.width=5, echo=FALSE }
+#Stacked bar plot. 
+##ASV - Disease 1% Abundance
+df_Type_ASV_Disease <- ASV_Percent_Disease
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Disease$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Disease <- df_Type_ASV_Disease %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Disease <- colMax(df_ASV_Disease[,15:length(df_ASV_Disease)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Disease <- colmax_ASV_Disease[colmax_ASV_Disease>1] #return any max that is >1
+other_ASV_Disease <- colmax_ASV_Disease[colmax_ASV_Disease<1]
+df._ASV_Disease <- df_ASV_Disease[,(names(df_ASV_Disease) %in% names(max._ASV_Disease))] #take the data and only return cols that are found in max.3
+other.df_ASV_Disease <- df_ASV_Disease[,(names(df_ASV_Disease) %in% names(other_ASV_Disease))]
+other.sum_ASV_Disease <- rowSums(other.df_ASV_Disease)
+df.new_ASV_Disease <- cbind(data.frame(df_ASV_Disease[,1]), data.frame(df._ASV_Disease), data.frame(other.sum_ASV_Disease)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Disease <- df_Type_ASV_Disease[names(df_Type_ASV_Disease) %in% names(df.new_ASV_Disease)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Disease, file="BacterialSpecies_byDisease.Prevalence>3%_Disease.csv")
+write.csv(df_se_ASV_Disease, file="BacterialSpecies_byDisease.Prevalence>3%_Disease_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Disease <- df.new_ASV_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Disease <- df_se_ASV_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Disease$SE
+missing_bacteria <- setdiff(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Disease$SE to reshaped_data_Disease$SE
+reshaped_data_Disease$SE <- ifelse(reshaped_data_Disease$Bacteria %in% reshaped_SE_Disease$Bacteria,
+                                    reshaped_SE_Disease$SE[match(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Disease <- reshaped_data_Disease
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Disease$Bacteria)
+
+include_Disease <- unique_species
+
+unique(species.percentage_Disease$timepoint)
+species.percentage_Disease$timepoint <- factor(species.percentage_Disease$timepoint, levels = timepoint_levels)
+
+stacked_Disease_1_ASV <- ggplot(data = species.percentage_Disease[species.percentage_Disease$Bacteria %in% include_Disease, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Disease Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Disease_1_ASV
+
+
+
+
+##ASV - Disease 3% Abundance
+df_Type_ASV_Disease <- ASV_Percent_Disease
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_ASV_Disease$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_ASV_Disease <- df_Type_ASV_Disease %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_ASV_Disease <- colMax(df_ASV_Disease[,17:length(df_ASV_Disease)]) #use the fxn on the numeric cols in the data
+
+max._ASV_Disease <- colmax_ASV_Disease[colmax_ASV_Disease>3] #return any max that is >3
+other_ASV_Disease <- colmax_ASV_Disease[colmax_ASV_Disease<3]
+df._ASV_Disease <- df_ASV_Disease[,(names(df_ASV_Disease) %in% names(max._ASV_Disease))] #take the data and only return cols that are found in max.3
+other.df_ASV_Disease <- df_ASV_Disease[,(names(df_ASV_Disease) %in% names(other_ASV_Disease))]
+other.sum_ASV_Disease <- rowSums(other.df_ASV_Disease)
+df.new_ASV_Disease <- cbind(data.frame(df_ASV_Disease[,1]), data.frame(df._ASV_Disease), data.frame(other.sum_ASV_Disease)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_ASV_Disease <- df_Type_ASV_Disease[names(df_Type_ASV_Disease) %in% names(df.new_ASV_Disease)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_ASV_Disease, file="BacterialSpecies_byDisease.Prevalence>3%_Disease.csv")
+write.csv(df_se_ASV_Disease, file="BacterialSpecies_byDisease.Prevalence>3%_Disease_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Disease <- df.new_ASV_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Disease <- df_se_ASV_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Disease$SE
+missing_bacteria <- setdiff(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Disease$SE to reshaped_data_Disease$SE
+reshaped_data_Disease$SE <- ifelse(reshaped_data_Disease$Bacteria %in% reshaped_SE_Disease$Bacteria,
+                                    reshaped_SE_Disease$SE[match(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Disease <- reshaped_data_Disease
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Disease$Bacteria)
+
+include_Disease <- unique_species
+
+unique(species.percentage_Disease$timepoint)
+species.percentage_Disease$timepoint <- factor(species.percentage_Disease$timepoint, levels = timepoint_levels)
+
+stacked_Disease_3_ASV <- ggplot(data = species.percentage_Disease[species.percentage_Disease$Bacteria %in% include_Disease, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Disease Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Disease_3_ASV
+
+stacked_Disease_1_ASV
+
+ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/stacked_Disease_3_ASV.pdf", plot=stacked_Disease_3_ASV, device= "pdf" )
+
+```
+## Stack Bar Plot - By Order
+```{r Stacked column by Order, fig.height=7.5, fig.width=5, echo=FALSE}
+#### Disease By Order
+# Group by "Order" before calculating percent abundance
+# Remove X's in ASV IDs. 
+colnames(merged_data_D)[31:ncol(merged_data_D)] <- gsub("^X", "", colnames(merged_data_D)[31:ncol(merged_data_D)])
+
+Disease_ASV <- t(merged_data_D[,31:length(merged_data_D)])
+colnames(Disease_ASV) <- merged_data_D$DEPSampleID
+Disease_ASV <- as.data.frame(Disease_ASV)
+Disease_ASV$ASV <- rownames(Disease_ASV)
+
+taxonomy$ASV <- rownames(taxonomy)
+# Add taxonomic ranks
+Disease_ASV <- merge(taxonomy,Disease_ASV,by="ASV")
+#keep only order for this part. 
+Disease_ASV <- Disease_ASV[,c(6,10:length(Disease_ASV))]
+
+sample_columns <- colnames(Disease_ASV)[2:ncol(Disease_ASV)]
+
+
+# Group by "Order" and summarize for each sample column
+collapsed_df <- Disease_ASV %>%
+  group_by(Order) %>%
+  summarise(across(all_of(sample_columns), sum, na.rm = TRUE))
+Disease_Order <- t(collapsed_df)
+Disease_Order <- as.data.frame(Disease_Order)
+colnames(Disease_Order) <- Disease_Order[1,]
+Disease_Order <- Disease_Order[-1,]
+Disease_Order$DEPSampleID <- rownames(Disease_Order)
+Disease_Order <- merge(merged_data_D[,1:30],Disease_Order,by="DEPSampleID")
+# removing random spaces incorporated into count values. 
+for (i in 31:ncol(Disease_Order)) {
+  Disease_Order[, i] <- as.numeric(gsub("\\s+", "", Disease_Order[, i]))
+}
+
+
+# Convert ASV reads into Percent Abundance (for stacked bar plots)
+total_counts_Disease_Order <- rowSums(Disease_Order[,31:length(Disease_Order)])
+
+# Calculate percent abundance for each ASV in each sample
+percent_abundance_Disease_Order <- ((Disease_Order[,31:length(Disease_Order)]) / total_counts_Disease_Order) * 100
+
+# Combine with metadata
+ASV_Percent_Disease_Order <- cbind(Disease_Order[,1:30], percent_abundance_Disease_Order)
+
+
+
+
+
+#Stacked bar plot. 
+##Order - Disease 1% Abundance
+df_Type_Order_Disease <- ASV_Percent_Disease_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Disease$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Disease <- df_Type_Order_Disease %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Disease <- colMax(df_Order_Disease[,15:length(df_Order_Disease)]) #use the fxn on the numeric cols in the data
+
+max._Order_Disease <- colmax_Order_Disease[colmax_Order_Disease>1] #return any max that is >1
+other_Order_Disease <- colmax_Order_Disease[colmax_Order_Disease<1]
+df._Order_Disease <- df_Order_Disease[,(names(df_Order_Disease) %in% names(max._Order_Disease))] #take the data and only return cols that are found in max.3
+other.df_Order_Disease <- df_Order_Disease[,(names(df_Order_Disease) %in% names(other_Order_Disease))]
+other.sum_Order_Disease <- rowSums(other.df_Order_Disease)
+df.new_Order_Disease <- cbind(data.frame(df_Order_Disease[,1]), data.frame(df._Order_Disease), data.frame(other.sum_Order_Disease)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Disease <- df_Type_Order_Disease[names(df_Type_Order_Disease) %in% names(df.new_Order_Disease)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Disease, file="BacterialSpecies_byTimepoint>1%_Disease.csv")
+write.csv(df_se_Order_Disease, file="BacterialSpecies_byTimepoint>1%_Disease_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Disease <- df.new_Order_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Disease <- df_se_Order_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Disease$SE
+missing_bacteria <- setdiff(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Disease$SE to reshaped_data_Disease$SE
+reshaped_data_Disease$SE <- ifelse(reshaped_data_Disease$Bacteria %in% reshaped_SE_Disease$Bacteria,
+                                    reshaped_SE_Disease$SE[match(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Disease <- reshaped_data_Disease
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Disease$Bacteria)
+
+include_Disease <- unique_species
+
+unique(species.percentage_Disease$timepoint)
+species.percentage_Disease$timepoint <- factor(species.percentage_Disease$timepoint, levels = timepoint_levels)
+
+stacked_Disease_1 <- ggplot(data = species.percentage_Disease[species.percentage_Disease$Bacteria %in% include_Disease, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Disease Only 1%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+stacked_Disease_1
+
+
+
+
+##Order - Disease 3% Abundance
+df_Type_Order_Disease <- ASV_Percent_Disease_Order
+#df_Type_sp<- read.csv("Species.percentage.csv")
+unique(df_Type_Order_Disease$timepoint)
+#filter_df <- aggregate(df_Type,by=df_Type["Specified"],FUN=mean)
+library(dplyr)
+
+#filter to keep bacteria above 1% abundance in any "Type" which is status+species.
+df_Order_Disease <- df_Type_Order_Disease %>% group_by(timepoint) %>% summarise_if(is.numeric, mean, na.rm = T) 
+#       take df_type, group data by first 3 columns, take the mean of the grouped data within numeric cols
+colMax <- function(data) sapply(data, max, na.rm = TRUE) #create fxn that returns the max value of each col
+colmax_Order_Disease <- colMax(df_Order_Disease[,15:length(df_Order_Disease)]) #use the fxn on the numeric cols in the data
+
+max._Order_Disease <- colmax_Order_Disease[colmax_Order_Disease>3] #return any max that is >3
+other_Order_Disease <- colmax_Order_Disease[colmax_Order_Disease<3]
+df._Order_Disease <- df_Order_Disease[,(names(df_Order_Disease) %in% names(max._Order_Disease))] #take the data and only return cols that are found in max.3
+other.df_Order_Disease <- df_Order_Disease[,(names(df_Order_Disease) %in% names(other_Order_Disease))]
+other.sum_Order_Disease <- rowSums(other.df_Order_Disease)
+df.new_Order_Disease <- cbind(data.frame(df_Order_Disease[,1]), data.frame(df._Order_Disease), data.frame(other.sum_Order_Disease)) #recombine the remaining cols with the type col info
+se <- function(x) {sqrt(var(x)/length(x))} #write fxn that returns standard error
+df_se_Order_Disease <- df_Type_Order_Disease[names(df_Type_Order_Disease) %in% names(df.new_Order_Disease)] %>% group_by(timepoint) %>% summarise_if(is.numeric, se) 
+write.csv(df.new_Order_Disease, file="BacterialSpecies_byTimepoint>3%_Disease.csv")
+write.csv(df_se_Order_Disease, file="BacterialSpecies_byTimepoint>3%_Disease_SE.csv")
+
+# Rearrange Data for Visualization using the pivot_longer function.
+library(tidyr)
+reshaped_data_Disease <- df.new_Order_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="Abundance") %>%
+  arrange(Bacteria,timepoint)
+
+reshaped_SE_Disease <- df_se_Order_Disease %>%
+  pivot_longer(cols=-timepoint,
+               names_to="Bacteria",
+               values_to="SE") %>%
+  arrange(Bacteria,timepoint)
+
+# Create a vector with 0 for missing bacteria in reshaped_SE_Disease$SE
+missing_bacteria <- setdiff(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)
+missing_values <- rep(0, length(missing_bacteria))
+
+# Assign values from reshaped_SE_Disease$SE to reshaped_data_Disease$SE
+reshaped_data_Disease$SE <- ifelse(reshaped_data_Disease$Bacteria %in% reshaped_SE_Disease$Bacteria,
+                                    reshaped_SE_Disease$SE[match(reshaped_data_Disease$Bacteria, reshaped_SE_Disease$Bacteria)],
+                                    missing_values)
+
+#df.new contains means>3
+#df_se contains se of each mean in df.new
+species.percentage_Disease <- reshaped_data_Disease
+#species.percentage <- read.csv("BacterialSpecies_byType>1%_barinput.csv")
+c33 <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "cadetblue4", "lightsalmon4", "khaki4", "olivedrab2", "coral3", "springgreen4", "darkblue", "hotpink1", "tomato4", "gray46", "deeppink2", "coral2", "cadetblue3", "mediumorchid4", "orchid3", "bisque3", "purple3", "springgreen4", "cyan4", "aquamarine3", "goldenrod3", "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728")
+unique_species <- unique(species.percentage_Disease$Bacteria)
+
+include_Disease <- unique_species
+
+unique(species.percentage_Disease$timepoint)
+species.percentage_Disease$timepoint <- factor(species.percentage_Disease$timepoint, levels = timepoint_levels)
+
+stacked_Disease_3 <- ggplot(data = species.percentage_Disease[species.percentage_Disease$Bacteria %in% include_Disease, ], aes(x = timepoint, y = Abundance, fill = reorder(Bacteria, Abundance))) +
+  geom_bar(stat = "identity", position = "fill", width = 0.5) +
+  theme_classic() +
+  labs(x = "timepoint", y = "Relative Abundance (%)", title = "Disease Only 3%") +
+  scale_fill_manual(values = c33) +
+  mytheme
+
+library(patchwork)
+stacked_Disease_3
+
+stacked_Disease_1
+#ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/Timepoint_diversity.pdf", plot =Timepoint_diversity, device="pdf")
+
+ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/stacked_Disease_3_Order.pdf", plot=stacked_Disease_3, device= "pdf" )
+```
+
+```{r, fig.height=8, fig.width=12, echo=FALSE}
+library(patchwork)
+stacked_Disease_3_ASV+stacked_Disease_3
+
+ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/stacked_Disease_3.pdf", plot=stacked_Disease_3_ASV+stacked_Disease_3, device= "pdf", 
+       width = 12, 
+       height = 8, 
+       units = "in" )
+
+```
+
+
+# ANCOM-BCII
+```{r Ancom libraries}
+# Load Libraries
+library(phyloseq)
+library(dplyr)
+library(ANCOMBC)
+library(nloptr)
+library(tidyverse)
+library(DT)
+```
+
+```{r Create Phyloseq Objects}
+#Create Phyloseq Object
+
+# taxonomy_ps arranged in prep.rmd. ASV as rownames without X's in the beginning of the row name. Columns concatenated so Order_ASVID is column "species"
+head(taxonomy_ps)
+
+duplicates <- counts_metadata_sub$DEPSampleID[duplicated(counts_metadata_sub$DEPSampleID)]
+counts_metadata_sub <- counts_metadata_sub[!duplicated(counts_metadata_sub$DEPSampleID), ]
+
+
+
+
+
+
+# All Samples
+
+metadata <- counts_metadata_sub[,1:30]
+rownames(metadata) <- metadata[,1]
+metadata <- metadata[,-1]
+
+colnames(counts_metadata_sub)[31:ncol(counts_metadata_sub)] <- gsub("^X", "", colnames(counts_metadata_sub)[31:ncol(counts_metadata_sub)])
+counts.t <- t(counts_metadata_sub[,31:length(counts_metadata_sub)])
+colnames(counts.t) <- t(counts_metadata_sub[,1])
+counts.t <- as.data.frame(counts.t)
+
+otu_table <- otu_table(as.matrix(counts.t), taxa_are_rows = T)
+samples <- sample_data(metadata)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps <- phyloseq(otu_table, TAX, samples)
+ps
+
+tse = mia::makeTreeSummarizedExperimentFromPhyloseq(ps)
+
+# Controls
+
+metadata_C <- counts_metadata_sub_C[,1:30]
+rownames(metadata_C) <- metadata_C[,1]
+metadata_C <- metadata_C[,-1]
+
+colnames(counts_metadata_sub_C)[31:ncol(counts_metadata_sub_C)] <- gsub("^X", "", colnames(counts_metadata_sub_C)[31:ncol(counts_metadata_sub_C)])
+counts.t_C <- t(counts_metadata_sub_C[,31:length(counts_metadata_sub_C)])
+colnames(counts.t_C) <- t(counts_metadata_sub_C[,1])
+counts.t_C <- as.data.frame(counts.t_C)
+
+otu_table_C <- otu_table(as.matrix(counts.t_C), taxa_are_rows = T)
+samples_C <- sample_data(metadata_C)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_C <- phyloseq(otu_table_C, TAX, samples_C)
+ps_C
+
+tse_C = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_C)
+
+# Disease
+
+metadata_D <- counts_metadata_sub_D[,1:30]
+rownames(metadata_D) <- metadata_D[,1]
+metadata_D <- metadata_D[,-1]
+
+colnames(counts_metadata_sub_D)[31:ncol(counts_metadata_sub_D)] <- gsub("^X", "", colnames(counts_metadata_sub_D)[31:ncol(counts_metadata_sub_D)])
+counts.t_D <- t(counts_metadata_sub_D[,31:length(counts_metadata_sub_D)])
+colnames(counts.t_D) <- t(counts_metadata_sub_D[,1])
+counts.t_D <- as.data.frame(counts.t_D)
+
+otu_table_D <- otu_table(as.matrix(counts.t_D), taxa_are_rows = T)
+samples_D <- sample_data(metadata_D)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps_D <- phyloseq(otu_table_D, TAX, samples_D)
+ps_D
+
+tse_D = mia::makeTreeSummarizedExperimentFromPhyloseq(ps_D)
+
+```
+
+```{r}
+
+# Convert mmetadata to dataframe if it's not already
+metadata <- as.data.frame(metadata)
+
+# Reorder levels of timepoint and Treatment
+metadata$timepoint <- factor(metadata$timepoint, levels = timepoint_levels)
+
+
+otu_table <- otu_table(as.matrix(counts.t), taxa_are_rows = T)
+samples <- sample_data(metadata)
+TAX <- tax_table(as.matrix(taxonomy_ps))
+
+ps <- phyloseq(otu_table, TAX, samples)
+ps
+```
+
+```{r ANCOM ps}
+tse = mia::makeTreeSummarizedExperimentFromPhyloseq(ps)
+
+# We want to make sure ANCOM-BC2 knows what our baseline samples are (controls or pre exposure samples). To do this we specify the order of samples, otherwise it refers to alphabetical order so for timepoint that would be early.exposure as the default baseline. 
+
+unique(tse$timepoint)
+tse$timepoint = factor(tse$timepoint, levels = timepoint_levels)
+
+levels(tse$timepoint)
+
+# All Samples - By ASV
+ancombc2_output_timepoint_ASV_raw = ancombc2(data = tse, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+
+
+# All Samples - By Order
+ancombc2_output_timepoint_Order_raw = ancombc2(data = tse, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+
+```
+
+```{r ANCOM PS_C}
+levels(tse_C$timepoint)
+
+# Controls - By ASV
+ancombc2_output_timepoint_C_ASV_raw = ancombc2(data = tse_C, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Controls - By Order
+ancombc2_output_timepoint_C_Order_raw = ancombc2(data = tse_C, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+```{r ANCOM PS_D}
+# Disease - By ASV
+ancombc2_output_timepoint_D_ASV_raw = ancombc2(data = tse_D, assay_name = "counts", tax_level = "species",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+# Disease - By Order
+ancombc2_output_timepoint_D_Order_raw = ancombc2(data = tse_D, assay_name = "counts", tax_level = "Order",
+                                        fix_formula = "timepoint", rand_formula = NULL,
+                                        p_adj_method = "bonferroni", pseudo = 0, pseudo_sens = TRUE,
+                                        prv_cut = 0.10, lib_cut = 1000, s0_perc = 0.05,
+                                        group = "timepoint", struc_zero = TRUE, neg_lb = TRUE,
+                                        alpha = 0.05, n_cl = 2, verbose = TRUE,
+                                        global = TRUE, pairwise = TRUE, dunnet = TRUE, trend = FALSE,
+                                        iter_control = list(tol = 1e-2, max_iter = 20, 
+                                                            verbose = TRUE),
+                                        em_control = list(tol = 1e-5, max_iter = 100),
+                                        lme_control = lme4::lmerControl(),
+                                        mdfdr_control = list(fwer_ctrl_method = "bonferroni", B = 100),
+                                        trend_control = list(contrast = list(matrix(c(1, 0, -1, 1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE),
+                                                                             matrix(c(-1, 0, 1, -1),
+                                                                                    nrow = 2, 
+                                                                                    byrow = TRUE)),
+                                                             node = list(2, 2),
+                                                             solver = "ECOS",
+                                                             B = 100))
+```
+
+
+#### ANCOMBC2 File Name Extraction
+```{r}
+
+# This script will read the unique ancombc2 output files and create a list of them so that subsequent ancom steps can loop through those file names. 
+
+# Read the R script file
+script <- readLines("./AnalysisDraftV2-Timepoint.Rmd") #SAVE .RMD before runnign to work
+
+# Define the range of line numbers to examine
+start_line <- 1486  # Adjust this to the starting line number
+end_line <- 1629    # Adjust this to the ending line number
+
+# Define the pattern to match variable names assigned to ancombc2_output objects
+pattern <- 'ancombc2_output_\\w+'
+
+
+# Extract variable names from the specified lines
+variable_names <- c()
+for (i in start_line:end_line) {
+  line <- script[i]
+  if (grepl(pattern, line)) {
+    matches <- regmatches(line, gregexpr(pattern, line))[[1]]
+    variable_names <- c(variable_names, matches)
+  }
+}
+
+# Get unique variable names
+unique_variable_names <- unique(variable_names)
+
+# Print the unique variable names
+print(unique_variable_names)
+
+```
+
+## ANCOMBC2 Visualization
+```{r ANCOMBC2 Visualization, fig.height=15, fig.width=15, echo=FALSE}
+
+# This chunk will loop through each unique ancombc2 output file name and visualize the LFC graph.
+
+# Testing the loop with a subset of ancom outputs. 
+ unique_variable_names <- c("ancombc2_output_timepoint_D_ASV_raw")
+
+# Loop through each name
+for (variable_name in unique_variable_names) {
+  ## Structural Zeros
+  
+  # All Samples
+  tab_zero <- eval(parse(text = paste0(variable_name, "$zero_ind")))
+  tab_zero <- tab_zero %>% datatable(caption = "The detection of structural zeros")
+  
+  ## Sensitivity Score
+  
+  # All Samples
+  tab_sens <- eval(parse(text = paste0(variable_name, "[['pseudo_sens_tab']]")))
+  tab_sens <- tab_sens %>% datatable(caption = "Sensitivity Scores") %>% formatRound(colnames(tab_sens)[-1], digits = 2)
+  
+  # ANCOM-BC2 Primary Results
+  res_prim <- eval(parse(text = paste0(variable_name, "[['res']]")))
+  
+  # Visualize
+  
+  # All samples - By Order - timepoint - Final
+  df_prim <- res_prim %>%
+    dplyr::select(taxon, contains("timepoint")) 
+  df_fig <- df_prim %>%
+    filter(diff_timepointFinal == 1) %>% 
+    arrange(desc(lfc_timepointFinal)) %>%
+    mutate(direct = ifelse(lfc_timepointFinal > 0, "Positive LFC", "Negative LFC"))
+  df_fig$taxon <- factor(df_fig$taxon, levels = df_fig$taxon)
+  df_fig$direct <- factor(df_fig$direct, levels = c("Positive LFC", "Negative LFC"))
+  
+  fig <- df_fig %>%
+  ggplot(aes(x = taxon, y = `lfc_timepointFinal`, fill = direct)) + 
+  geom_bar(stat = "identity", width = 0.5, color = "black", 
+           position = position_dodge(width = 0.46)) +  # Adjusted dodge width
+  geom_errorbar(aes(ymin = `lfc_timepointFinal` - `se_timepointFinal`, 
+                    ymax = `lfc_timepointFinal` + `se_timepointFinal`), 
+                width = 0.2, position = position_dodge(0.5), color = "black") + 
+  labs(x = NULL, y = "Log fold change", 
+       title = paste0("Log fold change of Final timepoint relative to Pre.Exposure\n", variable_name)) + 
+  scale_fill_discrete(name = NULL) +
+  scale_color_discrete(name = NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+        aspect.ratio = .5) #This changes the proportional size between colored bar and the frame of the figure to not be so disproportional
+
+print(fig)
+}
+
+ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/ANCOM_NonNormalized_D_ASV_PreVFinal.pdf", plot =fig, device="pdf", 
+       width = 10, 
+       height = 10, 
+       units = "in")
+
+```
+
+```{r}
+## Structural Zeros
+
+# All Samples
+tab_zero = ancombc2_output_timepoint$zero_ind
+tab_zero %>% datatable(caption = "The detection of structural zeros")
+
+## Sensitivity Score
+
+# All Samples
+tab_sens = ancombc2_output_timepoint$pseudo_sens_tab
+tab_sens %>% datatable(caption = "Sensitivity Scores") %>% formatRound(colnames(tab_sens)[-1], digits = 2)
+
+#ANCOM-BC2 Primary Results
+res_prim_timepoint = ancombc2_output_timepoint$res
+
+
+# Visualize 
+
+# All samples - By Order - timepoint - Resistant 
+# res_prim_timepoint
+df_prim = res_prim %>%
+  dplyr::select(taxon, contains("timepoint")) 
+df_fig = df_prim %>%
+  filter("diff_timepointHighly Susceptible" == 1) %>% 
+  arrange(desc("lfc_timepointHighly Susceptible")) %>%
+  mutate(direct = ifelse("lfc_timepointHighly Susceptible" > 0, "Positive LFC", "Negative LFC"))
+df_fig$taxon = factor(df_fig$taxon, levels = df_fig$taxon)
+df_fig$direct = factor(df_fig$direct, levels = c("Positive LFC", "Negative LFC"))
+
+
+fig = df_fig %>%
+  ggplot(aes(x = taxon, y = `lfc_timepointHighly Susceptible`, fill = direct)) + 
+  geom_bar(stat = "identity", width = 0.7, color = "black", 
+           position = position_dodge(width = 0.4)) +
+  geom_errorbar(aes(ymin = `lfc_timepointHighly Susceptible` - `se_timepointHighly Susceptible`, 
+                    ymax = `lfc_timepointHighly Susceptible` + `se_timepointHighly Susceptible`), 
+                width = 0.2, position = position_dodge(0.05), color = "black") + 
+  labs(x = NULL, y = "Log fold change", 
+       title = "Log fold changes") + 
+  scale_fill_discrete(name = NULL) +
+  scale_color_discrete(name = NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 8))
+fig
+
+```
+
+### Linear Discriminant Analysis
+```{r LDA Disease, Height = 20, width =10}
+# Load necessary libraries
+library(vegan)
+library(ggplot2)
+library(MASS)  # for lda()
+library(compositions)  # for CLR transformation
+library(ggrepel)
+
+
+# Prepare data for LDA
+abundance_data <- as.matrix(merged_data_D[31:length(merged_data_D)])
+abundance_data <- t(abundance_data)
+
+# Perform CLR transformation
+clr_data <- clr(abundance_data + 1)  # Adding pseudocount (1) to avoid zero values
+
+# Ensure the dimensions match
+metadata <- merged_data_D$timepoint
+grouping <- metadata
+
+# Transpose clr_data back to ensure samples are rows and features are columns
+clr_data <- t(clr_data)
+
+# Check dimensions and lengths again
+print("Dimensions of clr_data:")
+print(dim(clr_data))
+print("Length of grouping:")
+print(length(grouping))
+
+# Check for missing values
+if (any(is.na(clr_data)) || any(is.na(grouping))) {
+  stop("There are missing values in clr_data or grouping.")
+}
+
+# Check for near-zero variance features and remove them
+nzv <- apply(clr_data, 2, function(x) sd(x) < 1e-8)
+clr_data <- clr_data[, !nzv]
+
+# Ensure the grouping variable is a factor
+grouping <- as.factor(grouping)
+
+# Check if dimensions match
+if (nrow(clr_data) != length(grouping)) {
+  stop("Number of samples in clr_data and grouping do not match")
+} else {
+  print("Dimensions match. Proceeding with LDA.")
+}
+
+# Perform LDA
+lda_result <- lda(clr_data, grouping)
+
+# Visualize discriminant functions
+plot(lda_result)
+
+# If you want to visualize LDA results with ggplot2
+lda_data <- predict(lda_result)$x
+lda_data <- as.data.frame(lda_data)
+lda_data$timepoint <- metadata
+
+# Calculate correlations between species data and NMDS_D axes
+correlations <- cor(lda_data[,c(1,2)], merged_data_D[31:length(merged_data_D)], use = "pairwise.complete.obs")
+
+# Select top 4 variables based on correlation strength
+top_variables <- order(rowSums(correlations^2, na.rm = TRUE), decreasing = TRUE)[1:4]  # Top 4 variables
+top_variables <- top_variables[!is.na(top_variables)]  # Remove NA values
+
+# Function to scale vectors for plotting
+scale_vector <- function(vec, scale) {
+  vec * scale / sqrt(sum(vec^2))
+}
+
+# Get LDA_D coordinates
+LDA_D_points <- lda_data[,c(1,2)]
+
+# Scale vectors for plotting
+scaled_vectors <- apply(correlations[, top_variables, drop = FALSE], 2, scale_vector, scale = max(abs(LDA_D_points)))
+
+# Define colors and point shapes by timepoint
+cols <- c("darkseagreen", "cornflowerblue", "salmon", "red3", "cornflowerblue", "palegreen", "cornflowerblue", "chartreuse", "deepskyblue2")
+pchs <- c(16, 16, 15, 18)
+
+
+
+# Plot LDA results
+lda_plot <- ggplot(lda_data, aes(x = LD1, y = LD2, color = timepoint)) +
+  geom_point() +
+  labs(x = "LD1", y = "LD2", title = "LDA Plot")
+
+# Compute correlation matrix of CLR-transformed data
+clr_cor <- cor(clr_data)
+
+# Function to get top correlated bacteria
+filter_top_correlated_bacteria <- function(correlations, top_count) {
+  top_bacteria <- vector("list", nrow(correlations))
+  for (i in 1:nrow(correlations)) {
+    top_bacteria[[i]] <- c(
+      names(sort(correlations[i, ], decreasing = TRUE)[1:top_count]),
+      names(sort(correlations[i, ])[1:top_count])
+    )
+  }
+  unlist(top_bacteria)
+}
+
+# Get top positively and negatively correlated bacteria for each timepoint
+top_correlated_bacteria <- filter_top_correlated_bacteria(correlations, top_count = 4)
+
+# Identify collinear bacteria among the top correlated bacteria
+target_bacteria <- c("9bad4029a0f39755e43f448780053bc9", "68b9ce06fc98f29759c01b03263a5d67")
+
+# Calculate the second correlations matrix for target bacteria
+clr_data_target <- clr_data[, target_bacteria]
+target_correlations <- cor(clr_data, clr_data_target, use = "pairwise.complete.obs")
+
+# Identify bacteria significantly correlated with the target bacteria
+significant_correlated_bacteria <- rownames(target_correlations)[apply(target_correlations, 1, function(x) any(abs(x) > 0.7))]
+
+# Identify bacteria significantly correlated with specific target bacteria
+significant_correlated_bacteria_green <- significant_correlated_bacteria[target_correlations[significant_correlated_bacteria, "9bad4029a0f39755e43f448780053bc9"] > 0.1]
+significant_correlated_bacteria_red <- significant_correlated_bacteria[target_correlations[significant_correlated_bacteria, "68b9ce06fc98f29759c01b03263a5d67"] > 0.1]
+
+# Extract bacteria names with highest magnitude coefficients between classes
+top_bacteria_ld1 <- lda_result$scaling[, 1][order(abs(lda_result$scaling[, 1]), decreasing = TRUE)][1:5]
+top_bacteria_ld2 <- lda_result$scaling[, 2][order(abs(lda_result$scaling[, 2]), decreasing = TRUE)][1:5]
+top_bacteria <- unique(c(names(top_bacteria_ld1), names(top_bacteria_ld2)))
+
+lda1 <- lda_result$scaling[, 1][order(abs(lda_result$scaling[, 1]), decreasing = TRUE)]
+lda2 <- lda_result$scaling[, 2][order(abs(lda_result$scaling[, 2]), decreasing = TRUE)]
+
+# Define a scaling factor
+scaling_factor <- 10  # Adjust as needed
+
+# Find row indices of bacteria names in taxonomy_ps
+match_indices_correlated <- match(top_correlated_bacteria, rownames(taxonomy_ps))
+match_indices_top <- match(top_bacteria, rownames(taxonomy_ps))
+match_indices_significant_green <- match(significant_correlated_bacteria_green, rownames(taxonomy_ps))
+match_indices_significant_red <- match(significant_correlated_bacteria_red, rownames(taxonomy_ps))
+
+# Replace bacteria names with corresponding species names
+top_species_correlated <- ifelse(!is.na(match_indices_correlated), taxonomy_ps$Order[match_indices_correlated], top_correlated_bacteria)
+top_species_top <- ifelse(!is.na(match_indices_top), taxonomy_ps$Order[match_indices_top], top_bacteria)
+top_species_significant_green <- ifelse(!is.na(match_indices_significant_green), taxonomy_ps$Order[match_indices_significant_green], significant_correlated_bacteria_green)
+top_species_significant_red <- ifelse(!is.na(match_indices_significant_red), taxonomy_ps$Order[match_indices_significant_red], significant_correlated_bacteria_red)
+
+# Create dataframe for correlated vectors with scaled xend and yend
+correlated_vectors_df <- data.frame(
+  x = rep(0, length(top_correlated_bacteria)),
+  y = rep(0, length(top_correlated_bacteria)),
+  xend = lda1[match(top_correlated_bacteria, names(lda1))] * scaling_factor,
+  yend = lda2[match(top_correlated_bacteria, names(lda2))] * scaling_factor,
+  bacteria = top_correlated_bacteria,
+  species = top_species_correlated  # Include species names
+)
+
+# Create dataframe for top vectors with scaled xend and yend
+top_vectors_df <- data.frame(
+  x = rep(0, length(top_bacteria)),
+  y = rep(0, length(top_bacteria)),
+  xend = lda_result$scaling[top_bacteria, 1] * scaling_factor,
+  yend = lda_result$scaling[top_bacteria, 2] * scaling_factor,
+  bacteria = top_bacteria,
+  species = top_species_top  # Include species names
+)
+
+# Create dataframe for significant correlated vectors with scaled xend and yend (Green)
+significant_vectors_df_green <- data.frame(
+  x = rep(0, length(significant_correlated_bacteria_green)),
+  y = rep(0, length(significant_correlated_bacteria_green)),
+  xend = lda1[match(significant_correlated_bacteria_green, names(lda1))] * scaling_factor,
+  yend = lda2[match(significant_correlated_bacteria_green, names(lda2))] * scaling_factor,
+  bacteria = significant_correlated_bacteria_green,
+  species = top_species_significant_green  # Include species names
+)
+
+# Create dataframe for significant correlated vectors with scaled xend and yend (Red)
+significant_vectors_df_red <- data.frame(
+  x = rep(0, length(significant_correlated_bacteria_red)),
+  y = rep(0, length(significant_correlated_bacteria_red)),
+  xend = lda1[match(significant_correlated_bacteria_red, names(lda1))] * scaling_factor,
+  yend = lda2[match(significant_correlated_bacteria_red, names(lda2))] * scaling_factor,
+  bacteria = significant_correlated_bacteria_red,
+  species = top_species_significant_red  # Include species names
+)
+
+
+# Define a named vector of colors for bacteria
+bacteria_colors <- c("Pre.Exposure" = "darkseagreen",
+                     "Early.Exposure"= "cornflowerblue",
+                     "Initial.Disease" = "salmon",
+                     "Final" = "#9564F2", #red3
+                     "Significant.Green" = "darkgreen",
+                     "Significant.Red" = "red")
+
+# Overlay vectors on LDA plot, color-coded by timepoint and significance
+# Basic LDA
+lda_plot+
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot - Disease") +
+  theme_minimal()
+
+# LDA with LDA axis Correlated Bacteria
+lda_plot +
+  geom_segment(data = correlated_vectors_df, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "black") +
+  geom_text_repel(data = correlated_vectors_df, aes(x = xend, y = yend, label = species),
+                  color = "black", size = 3) +
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot with Top LDA Correlated Vectors - Disease") +
+  theme_minimal()
+correlated_vectors_df
+#LDA with Top Coefficient Bacteria
+lda_plot +
+  geom_segment(data = top_vectors_df, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "grey") +
+  geom_text_repel(data = top_vectors_df, aes(x = xend, y = yend, label = species),
+                  color = "grey", size = 3) +
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot with Top LDA Coefficient Vectors - Disease") +
+  theme_minimal()
+top_vectors_df
+# LDA with Collinear Bacteria
+lda_plot +
+  geom_segment(data = significant_vectors_df_green, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "darkgreen") +
+  geom_text_repel(data = significant_vectors_df_green, aes(x = xend, y = yend, label = species),
+                  color = "darkgreen", size = 3) +
+  geom_segment(data = significant_vectors_df_red, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "red") +
+  geom_text_repel(data = significant_vectors_df_red, aes(x = xend, y = yend, label = species),
+                  color = "red", size = 3) +
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot with Collinear Vectors - Disease") +
+  theme_minimal()
+
+# LDA with LDA axis correlated, top coefficient, and collinear bacteria
+lda_plot +
+  geom_segment(data = correlated_vectors_df, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "black") +
+  geom_text_repel(data = correlated_vectors_df, aes(x = xend, y = yend, label = species),
+                  color = "black", size = 3) +
+  geom_segment(data = top_vectors_df, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "grey") +
+  geom_text_repel(data = top_vectors_df, aes(x = xend, y = yend, label = species),
+                  color = "grey", size = 3) +
+  geom_segment(data = significant_vectors_df_green, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "darkgreen") +
+  geom_text_repel(data = significant_vectors_df_green, aes(x = xend, y = yend, label = species),
+                  color = "darkgreen", size = 3) +
+  geom_segment(data = significant_vectors_df_red, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "red") +
+  geom_text_repel(data = significant_vectors_df_red, aes(x = xend, y = yend, label = species),
+                  color = "red", size = 3) +
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot with Top LDA Correlated, Coefficient, and Significant Vectors - Disease") +
+  theme_minimal()
+
+ fig <- lda_plot +
+  geom_segment(data = correlated_vectors_df, aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.2, "cm")), size = 1, color = "black") +
+  geom_text_repel(data = correlated_vectors_df, aes(x = xend, y = yend, label = species),
+                  color = "black", size = 3) +
+  scale_color_manual(values = bacteria_colors) +
+  labs(title = "LDA Plot with Top LDA Correlated Vectors - Disease") +
+  theme_minimal()
+  
+# correlated_vectors_df contains data for vectors representing bacteria significantly correlated with plot axes.
+# top_vectors_df contains data for vectors representing the top bacteria based on LDA coefficients.
+# significant_vectors_df_green contains data for vectors representing bacteria significantly correlated with "9bad4029a0f39755e43f448780053bc9", colored in dark forest green.
+# significant_vectors_df_red contains data for vectors representing bacteria significantly correlated with "68b9ce06fc98f29759c01b03263a5d67", colored in red.
+
+ # ggsave("~/Desktop/Ofav SCTLD/R/Ofav SCTLD - By Timepoint/LDA_D_LDACorrelated_.pdf", plot =fig, device="pdf")
+# figure was named by simply adding "figure <- " before the lda plot that had the correlated vectors. After making that plot, I removed the "figure <- " because its only for exporting for the DEP presentation as a one-off for now. 
+
+```
+
+
+
