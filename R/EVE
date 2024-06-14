@@ -1,0 +1,118 @@
+# Expression Variance and Evolution Model - EVE
+
+EVE Publication: https://pubmed.ncbi.nlm.nih.gov/26169525/
+
+## Libraries
+devtools::install_gitlab("sandve-lab/evemodel")
+library(evemodel)
+library(ape)
+library(tidyverse)
+
+
+# Read in Files
+## Count data
+### "merged_data" has samples has 30 columns of metadata followed by columns of ASVs with normalized count data. Samples are rows.
+merged_data <- read.csv("merged_data.csv")
+bacteriaTbl <- merged_data[,31:length(merged_data)] # Isolate count data
+bacteriaMat <- as.matrix(bacteriaTbl) # convert to matrix
+
+### Log Transform
+rownames(bacteriaMat) <- merged_data$DEPSampleID
+dim(bacteriaMat)
+summary(log10(bacteriaMat[,1:321]+1)) #seeing what kind of transformation is ideal. EVE recommends log transformed
+bacteriaMat <- log10(bacteriaMat[,1:321]+1) #applying the log transform
+bacteriaMat <- t(bacteriaMat)
+
+### Species Tree
+speciesTree <- read.tree(file="../Newick_New.txt") # April "New" Genotype IDs
+plot(speciesTree, cex=0.5)
+speciesTree$tip.label
+speciesTree$edge.length
+
+# the columns in the expression matrix are:
+colnames(bacteriaMat)
+
+# remove the trailing number so that we get a vector with the species for each column
+colSpecies <- sub("_.*$","",colnames(bacteriaMat))
+colSpecies
+
+## Running the beta shared test
+### The beta shared test, (a.k.a. phylogenetic ANOVA), can detect genes with increased or decreased ratios of expression divergence to diversity (this ratio is the beta parameter). The model can be used for purposes such as identifying genes with high expression divergence between species as candidates for expression level adaptation, and genes with high expression diversity within species as candidates for expression level conservation and or plasticity.
+### This works by finding a shared beta that gives the maximum likelihood across all genes and comparing that to the model where the beta is fitted to each individual gene.
+### With <100 samples this should take about 20 minutes. I ran it also with 1200+ samples and it took 5.5 days with 16gb of available ram and an M1 chip. 
+res <- betaSharedTest(tree = speciesTree, gene.data = bacteriaMat, colSpecies = colSpecies)
+res$sharedBeta
+
+
+# plot likelihood ratio test statistic histogram
+hist(res$LRT,freq = F)
+# Plot the chi-squared distribution with one degree of freedom
+x = seq(0.5,10,length.out = 100)
+y = dchisq(x,df = 1)
+lines(x,y,col="red")
+
+# P-value can then be calculated using:
+pval = pchisq(res$LRT,df = 1,lower.tail = F)
+
+# Combine LRT, beta, theta, sigma2, alpha:
+head(cbind(res$LRT,res$indivBetaRes$par,pval))
+EVE_results <- cbind(res$LRT,res$indivBetaRes$par,pval,bacteriaMat[,1:1209])
+#bacteria
+rownames(EVE_results) <- rownames(bacteriaMat)
+
+# Give Column Name to LRT column
+colnames(EVE_results)
+colnames(EVE_results)[colnames(EVE_results)==""] <- "LRT"
+head(EVE_results)
+
+# Export results
+write.csv(EVE_results, file="EVE_results.csv")
+
+
+### Filter Signficant Bacteria
+
+# Visualize LRT v Beta by volcano plot for gene data
+colnames(EVE_results)[colnames(EVE_results)=="X"] <- "ASV"
+colnames(EVE_results)
+head(EVE_results)
+EVE_results$ASV <- sub("^X", "", EVE_results$ASV) # Remove the X at the beginning of some ASV IDs.
+EVE_results_sig <- EVE_results %>% filter(pval <= 0.1) #Conservative p-value  filtration of 0.1
+
+write.csv(EVE_results_sig, file="Signficant EVE Bacteria.csv")
+
+### Prepare for Visualization
+EVE_results$type <- ifelse(EVE_results$beta<res$sharedBeta,"Lineage Specific","Highly Variable")
+EVE_results$significant <- ifelse(EVE_results$pval<=0.1,"Significant","Not Significant")
+EVE_results$category <- ifelse(EVE_results$significant == "Significant",EVE_results$type,"NS")
+colnames(EVE_results)
+EVE_results <- EVE_results %>% relocate(type, .after = pval)
+EVE_results <- EVE_results %>% relocate(significant, .after = type)
+EVE_results <- EVE_results %>% relocate(category, .after = significant)
+
+
+log(res$sharedBeta) # 3.70731
+EVE_results_sig <- EVE_results %>% filter(pval <= 0.1)
+
+# Make a basic volcano plot
+EVE_results_sig_LS <- EVE_results_sig %>% filter(log(beta)< (log(res$sharedBeta)))
+dim(EVE_results_sig_LS)  #174
+EVE_results_sig_HV <- EVE_results_sig_sig %>% filter(log(beta)> (log(res$sharedBeta)))
+dim(EVE_results_sig_HV)  #15
+
+p <- ggplot(data = EVE_results,
+            aes(x=log(beta),y=-log(pval),color=type))+
+  geom_point()+
+  scale_color_manual(values=c("#f37225","#00b9e3","black"))+
+  geom_vline(xintercept = 3.971168, col="black", linetype="dashed")+
+  annotate("text", x = 7, y = 245, label = "log(shared beta)", size = 3)+
+  geom_hline(yintercept = -log(0.1), col="black",linetype = "dashed")+
+  annotate("text", x = 24, y = 10, label = "p = 0.1", size = 3)+
+  xlim(-1,25)+
+  ylim(-5,250)+
+  theme_light()
+p + labs(color = "EVE Category",title = "EVE Volcano Plot",subtitle = "# Lineage Specific Bacteria and # Highly Variable Bacteria") +
+  theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(size = 9))
+
+
+write.csv(EVE_results_sig_LS, "EVE_LS.csv")
+write.csv(EVE_results_sig_HV, "EVE_HV.csv")
