@@ -1,5 +1,5 @@
 
-:microbe:	# Welcome :microbe:	
+:microbe:	#Welcome :microbe:	
 
 You are looking at a github repository that contains _educational instruction_ on how to perform the necessary **Benchwork**, **Bioinformatics**, and **Statistical Analysis** to investigate the taxonomic presence and abundance of a Microbiome.
 
