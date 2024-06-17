@@ -1,0 +1,9 @@
+Hello!
+
+The six files you see are the primary output files that are required for statistical analysis in R. There are many other cool and useful outputs that can be created through auxilliary investigations with Qiime2, but the ones here are the most essential to exploring microbial ecology. 
+
+These are Qiime2 formattaed files (.qza and .qzv). You will not be able to simply download and open them to look at them and will need to have Qiime2 installed and use Qiime2 tools via command line to open them. How overly complicated!
+
+The .qzv files are a way to visualize the files in a web browser as a table.
+The .qza files are the files that are manipulated to create .tsv files. You can find instructions on how to convert .qza to .tsv files in the Qiime2 Pipeline script in this github. Go one parent directory up. 
+
