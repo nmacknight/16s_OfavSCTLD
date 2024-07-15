@@ -1,6 +1,6 @@
 
-[!TIP]
-To efficiently implement this code, view the raw version in github, then Copy and Paiste the raw version into an Rmarkdown file. 
+> [!TIP]
+> To efficiently implement this code, view the raw version in github, then Copy and Paiste the raw version into an Rmarkdown file. 
 
 # Purpose
 
@@ -17,17 +17,20 @@ The purpose of this document is to act as an efficient, streamlined, and compreh
 
 ### 3.) Specify the independent variable to be explored. 
   - This rmarkdown will be associated with a independent variable (timepoint) or a combination of multiple to be explored from start to finish. 
-  - In this example of the R script, I look at the metadata independent variable "timepoint". 
-  - To use this script efficiently, I recommend having an R project specifically for one independent variable at a time. For example I am calling this one "OfavSCTLD-ByTimepoint". If I want to compare the genotype susceptibliity categories I will create a new R project called "OfavSCTLD-ByGenotypeSusceptibility" and open up this R Script, replace "timepoint" for my GenotypeSusceptibility metadata column name, update the levels to specify the order of susceptibilty rankings, and simply rerun the script.
-  - The power in this script is that you will have seperated R projects that cleanly and comprehensively analyze the metadata variable of interest. 
+  - In this example of the R script, I look at the metadata independent variable "timepoint".
+
+> [!TIP] 
+>  - To use this script efficiently, I recommend having an R project specifically for one independent variable at a time. For example I am calling this one "OfavSCTLD-ByTimepoint". If I want to compare the genotype susceptibliity categories I will create a new R project called "OfavSCTLD-ByGenotypeSusceptibility" and open up this R Script, replace "timepoint" for my GenotypeSusceptibility metadata column name, update the levels to specify the order of susceptibilty rankings, and simply rerun the script.
+>  - The power in this script is that you will have seperated R projects that cleanly and comprehensively analyze the metadata variable of interest. 
   
 ### 4.) Analysis to perform
-CLR + TSS Normalization
-NMDS
-SIMPER
-Stacked Column
-ANCOM-BCII
-Diversity
+- TSS Normalization
+- NMDS
+- SIMPER
+- Diversity
+- Stacked Column
+- ANCOM-BCII
+- Linear Descriminant Analysis (LDA)
 
 # Libraries
 ```{r Libraries}
@@ -73,7 +76,13 @@ counts_metadata_sub <- counts_metadata_sub[,-1] # Removing the first row which i
 # Normalization
 There are several ways to normalize 16s data and each microbial ecologist is willing to defend their method as the only conceivable way and declare others as completely ridiculous and only a fool would disagree with them. Id like to put them all in a room. For science.
 
-So, I will consider different normalization strategies. I, am in favor of total sum scaling TSS, or proportional normalization. Lets say a sample has 10,000 reads in total and I want to normalize all samples to 5,000 reads per sample as I have determined through my rarefaction graphing that 5,000 is the lower quartile read depth and around where I capture the most unique ASVs while retaining the most samples. Anyways, TSS normalization will scale the 10,000 read sample to 5,000 reads and effectively cut the reads across all samples in half so that read depth is not a bias and multiple samples can be fairly compared. To me this makes the most sense in my head relative to other normalization methods. What I recommend is you go with what your advisor favors/has used in the past. If you are in the position to consider your preference, I recommend you explore whats out there, and apply these methods with your data to get an appreciation and go from there. 
+For an incredibly oversimplified overview on the Lore of normalization,
+Rarefaction used to the go-to approach and then a manuscript came out and declared rarefaction "inadmissable". So scientists began to consider alternative approaches, a recent one gaining popularity is Centered-Log Ration (CLR) normalization. Recently a publication demosntrated this approach is biased towards read depth.
+
+So rather than sitting on your hands and doing nothing or defending your approach as the end-all-be-all, pick an approach that makes sense to YOU and be a good scientist and understand the caveats of your approach and if it is still a sensible strategy for your questions then go forth and normalize.
+
+So, while I have trialed out a series of different normalization strategies I am in favor of proportional normalization. Here's why it makes sense to me - Lets say a sample has 10,000 reads in total and I want to normalize all samples to 5,000 reads per sample as I have determined through my rarefaction graphing (this is seperate from rarefaction normalization) that 5,000 is the lower quartile read depth and around where I capture the most unique ASVs while retaining the most samples. Proportional normalization will proportionally scale the 10,000 read sample to 5,000 reads so that read depth is not a bias and multiple samples can be fairly compared with the same read depth. So now all my samples are normalized to a read depth of 5000 total reads and if an ASV has a signficant difference in read count between samples it is not because of read depth but because something infleunced the abundance of that ASV relative to the others which allows me to perform statistical comparisons. To me this makes the most sense in my head relative to other normalization methods. There are pages of publications exploring this in further detail so ill stop there. If you are brand new to microbial ecology the ugly truth is you will likely select an approach that your advisor favors/has used in the past. An early stage as a scientist is figuring out whay you can do and how you can do it. Very quickly though you need to consider what you cant do or what the limitiations are with your chosen approach. If you are in the position to consider your preference, I recommend you explore whats out there, and apply these various methods with your data to get an appreciation and as a learning exercise and go from there. 
+
 ```{r TSS Normalization}
 # This is the proportional normalization function.
 # In a more detailed explanation of how this function works, it will consider the cut off read depth, defined outside this function as "minimum_row_sum". It looks at a coral sample and the read depth across all bacteria. It ranks this read depth from 1 to the total read depth for that sample. So lets say ASV1 has a read depth of 10 and the second ASV2 has a read depth of 50. The function will give positional assignment of numbers 1-10 to ASV1 and 11-51 to ASV2 and so on for all ASVs and their read depth. Then, it will randomly select a number the number of times equal to the desired cutoff read depth. This way, the more reads an ASV has, the greater chance the randomly selected number is one that was assigned to that ASV. As a result, the normalization that occurs is proportional to the original read depth, where ASVs with higher read depth will likely be higher than those that originally had lower read depth, but now the read depth across all samples is the same, and normalized for comparison. This is similar to rarefaction, however rarefaction simply randomly selects  numbers, this proportional normalization assigns that positional number so the random samply is relative to the original read depth. 
