@@ -1,4 +1,7 @@
 
+[!TIP]
+To efficiently implement this code, view the raw version in github, then Copy and Paiste the raw version into an Rmarkdown file. 
+
 # Purpose
 
 The purpose of this document is to act as an efficient, streamlined, and comprehensive script to perform 16s analysis.
@@ -29,19 +32,19 @@ Diversity
 # Libraries
 ```{r Libraries}
 
-** NMDS **
+# NMDS
 library(vegan)
 library(tidyverse)
 library(dplyr)
 library(ggplot2)
 
-** Pairwise Adonis **
+# Pairwise Adonis
 #install.packages('devtools')
 library(devtools)
 #install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
 library(pairwiseAdonis)
 
-** Violin Plots **
+# Violin Plots
 #install.packages("wesanderson")
 library(tidyverse)
 library(ggthemes)  # for a mapping theme
