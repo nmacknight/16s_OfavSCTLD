@@ -1,31 +1,24 @@
----
-title: "16sMasterDraftV1"
-author: "Nick MacKnight"
-date: "4/22/2024"
-output:
-  pdf_document: default
-  html_document: default
----
 
-## Purpose
+# Purpose
 
 The purpose of this document is to act as an efficient, streamlined, and comprehensive script to perform 16s analysis.
 
-Stages:
+# Stages:
 
-1.) Questions.
+### 1.) Questions.
   - Specifically write out the questions that the analysis is intended to address.
 
-2.) Meta analysis curation.
-  - This is a foundational file that any downstream file will be susbsetted from.
+### 2.) Meta analysis curation.
+  - This is a foundational file that this script relies upon.
+  - This file utilizes both a phyloseq object (for ANCOM-BCII) and a traditional file where rows are samples and columns are ASVs. In my metadata file the first 30 columns are metadata columns (Treatment, timepoint, gentoype susceptibility, and so on) from columns 31 to the end of the file are ASVs and their count data. 
 
-3.) Specify the independent variable to be explored. 
-  - This rmarkdown will be associated with a independent variable or a combination of multiple to be explored from start to finish. 
-  - i.e a report will be comparing treatment. a completely separate report will be comparing disease outcome or species. 
-  - However combined reports can be created that combine treatment and species. so lets say you want to compare species in just diesase-exposed treatment. that would be a separate report. This way independent variables stay organized by their separation and you know that independent variable was explored with the comprehensive list of analysis. 
+### 3.) Specify the independent variable to be explored. 
+  - This rmarkdown will be associated with a independent variable (timepoint) or a combination of multiple to be explored from start to finish. 
+  - In this example of the R script, I look at the metadata independent variable "timepoint". 
+  - To use this script efficiently, I recommend having an R project specifically for one independent variable at a time. For example I am calling this one "OfavSCTLD-ByTimepoint". If I want to compare the genotype susceptibliity categories I will create a new R project called "OfavSCTLD-ByGenotypeSusceptibility" and open up this R Script, replace "timepoint" for my GenotypeSusceptibility metadata column name, update the levels to specify the order of susceptibilty rankings, and simply rerun the script.
+  - The power in this script is that you will have seperated R projects that cleanly and comprehensively analyze the metadata variable of interest. 
   
-4.) Analysis to perform
-EVE
+### 4.) Analysis to perform
 CLR + TSS Normalization
 NMDS
 SIMPER
@@ -36,19 +29,19 @@ Diversity
 # Libraries
 ```{r Libraries}
 
-# NMDS
+** NMDS **
 library(vegan)
 library(tidyverse)
 library(dplyr)
 library(ggplot2)
 
-# Pairwise Adonis
+** Pairwise Adonis **
 #install.packages('devtools')
 library(devtools)
 #install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
 library(pairwiseAdonis)
 
-# Violin Plots
+** Violin Plots **
 #install.packages("wesanderson")
 library(tidyverse)
 library(ggthemes)  # for a mapping theme
@@ -68,7 +61,7 @@ library(ggplot2)
 
 
 
-# Read in Prepared Files
+### Read in Prepared Files
 ```{r read in files}
 counts_metadata_sub <- read.csv("counts_metadata_sub.csv") # Non-Normalized Master File from Prep.Rm
 counts_metadata_sub <- counts_metadata_sub[,-1] # Removing the first row which is of X 1,2,3,etc and added in during the read.csv stage
