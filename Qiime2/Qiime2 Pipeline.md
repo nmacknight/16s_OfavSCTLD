@@ -18,8 +18,9 @@ flowchart TD
 		direction LR
 		D--Repeat Steps 1-3 for<br/>Each Sequence Run-->E([4. Merge]);
 		E-->F([5.Taxonomic Classification]);
-		F-->G([6. Phylogenetic Tree]);
-		G-->H([7. Export]);
+		G-->H([6. Filtration]);
+		H-->I([7. Phylogenetic Tree]);
+		I-->J([8. Export]);
 	end
 
 ```
@@ -371,7 +372,7 @@ qiime taxa barplot \
 qiime tools view taxa-bar-BacArc.qzv
 ```
 
-# 5. Filtering
+# 6. Filtering
 
 Purpose: In the previous step we performed taxonomic filtration. In this step we are filtering low abundant and low prevalent bacteria as they are likely not relevant to our questions. For example, if a bacteria was found in one sample and with a single read, its not likely biologically relevant. This is an extreme example but many bacteria have low abundance/prevalence and can be removed.
 
@@ -405,13 +406,20 @@ qiime diversity alpha-rarefaction \
 qiime tools view ./RarefactionClustered/table-BacArc_20k_Fr10S195.qzv
 ```
 
+Once we are happy with our filtered dataset, we will create a new rep_seq.qza file
+```
+qiime feature-table filter-seqs \
+  --i-data rep_seqs_BacArc.qza \
+  --i-table ./RarefactionClustered/table-BacArc_Fr10S195.qza \
+  --o-filtered-data ./RarefactionClustered/rep_seqs_BacArc_Fr10S195.qza
+```
 
-# 6. Generate a Phylogenetic Tree
+# 7. Generate a Phylogenetic Tree
 
 ```
 mkdir PhylogeneticTree
 qiime phylogeny align-to-tree-mafft-fasttree \
-  --i-sequences rep_seqs_BacArc.qza \
+  --i-sequences rep_seqs_BacArc_Fr10S195.qza \
   --o-alignment ./PhylogeneticTree/aligned-rep-seqs.qza \
   --o-masked-alignment ./PhylogeneticTree/masked-aligned-rep-seqs.qza \
   --o-tree ./PhylogeneticTree/unrooted-tree.qza \
@@ -419,7 +427,7 @@ qiime phylogeny align-to-tree-mafft-fasttree \
 ```
 >RunTime: ~2.5 days!
 
-# 7. Export
+# 8. Export
 
 Export Reads and Taxonomy files
 ```
