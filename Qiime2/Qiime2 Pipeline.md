@@ -18,9 +18,9 @@ flowchart TD
 		direction LR
 		D--Repeat Steps 1-3 for<br/>Each Sequence Run-->E([4. Merge]);
 		E-->F([5.Taxonomic Classification]);
-		G-->H([6. Filtration]);
-		H-->I([7. Phylogenetic Tree]);
-		I-->J([8. Export]);
+		F-->G([6. Filtration]);
+		G-->H([7. Phylogenetic Tree]);
+		H-->I([8. Export]);
 	end
 
 ```
