@@ -373,6 +373,12 @@ qiime tools view taxa-bar-BacArc.qzv
 
 # 5. Filtering
 
+Purpose: In the previous step we performed taxonomic filtration. In this step we are filtering low abundant and low prevalent bacteria as they are likely not relevant to our questions. For example, if a bacteria was found in one sample and with a single read, its not likely biologically relevant. This is an extreme example but many bacteria have low abundance/prevalence and can be removed.
+
+The second purpose in this step is to identify the minimum read depth that allows you to retain the most number of samples. To do this, play with the filtration parameters "--p-min-frequency" and "--p-min-samples" values from being 0 (not filtration) to gradually being more and more strict (higher values). Now this depends on your samples, but a good starting place is a min read depth of 10 or 100 and then min-sample values that range from 1% to 30% of your samples. In the example code below 12% of my samples was 195 samples. 
+
+Document the results of these parameters on your dataset, specifically note two values. 1) the 1st quartile sample value from table-summarize function. This is the read depth that will result in 75% retention of your samples or a loss of 25% of your samples. 2) From the rarefaction curve, make a note of where the arc in the observed features begins to plateau. Subtract the difference between the 1st quartile value and the observational value you estimate from looking at the rarefaction curve. The filtration parameters that give you the least difference between those two values likely is giving you the best sample retention while observing the maximum number of unique ASVs.
+
 Min Read depth of 10
 ```
 qiime feature-table filter-features \
@@ -380,7 +386,8 @@ qiime feature-table filter-features \
   --p-min-frequency 10 \
   --o-filtered-table ./RarefactionClustered/table-BacArc_Fr10.qza
 ```
-# Min Frequency of 12% samples
+
+Min Frequency of 12% samples
 ```
 qiime feature-table filter-features \
   --i-table ./RarefactionClustered/table-BacArc_Fr10.qza \
