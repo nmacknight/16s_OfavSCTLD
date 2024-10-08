@@ -371,6 +371,33 @@ qiime taxa barplot \
 qiime tools view taxa-bar-BacArc.qzv
 ```
 
+# 5. Filtering
+
+Min Read depth of 10
+```
+qiime feature-table filter-features \
+  --i-table table-BacArc-cl.qza \
+  --p-min-frequency 10 \
+  --o-filtered-table ./RarefactionClustered/table-BacArc_Fr10.qza
+```
+# Min Frequency of 12% samples
+```
+qiime feature-table filter-features \
+  --i-table ./RarefactionClustered/table-BacArc_Fr10.qza \
+  --p-min-samples 195 \
+  --o-filtered-table ./RarefactionClustered/table-BacArc_Fr10S195.qza
+```
+```
+qiime diversity alpha-rarefaction \
+  --i-table ./RarefactionClustered/table-BacArc_Fr10S195.qza \
+  --p-max-depth 20000 \
+  --m-metadata-file metadata.sub.tsv \
+  --o-visualization ./RarefactionClustered/table-BacArc_20k_Fr10S195.qzv
+```
+```
+qiime tools view ./RarefactionClustered/table-BacArc_20k_Fr10S195.qzv
+```
+
 
 # 6. Generate a Phylogenetic Tree
 
