@@ -10,17 +10,17 @@ Leveraging 192 unique barcodes, we performed the library prep in house and seque
 ```mermaid
 flowchart TD
 	subgraph  
-		A[Reads From Sequencer]-->B[ 1. Import Data];
-		B -->C[2. Cutadapt - Removes Primers & other artificial nucelotides];
-		C-->D[3. DADA2 - Cuts read length when Quality <30];
+		A[Reads From Sequencer]-->B[ 1.Import Data];
+		B -->C[2.Cutadapt - Removes Primers & other artificial nucelotides];
+		C-->D[3.DADA2 - Cuts read length when Quality <30];
 	end
 	subgraph  
 		direction LR
-		D--Repeat Steps 1-3 for<br/>Each Sequence Run-->E([4. Merge]);
+		D--Repeat Steps 1-3 for<br/>Each Sequence Run-->E([4.Merge]);
 		E-->F([5.Taxonomic Classification]);
-		F-->G([6. Filtration]);
-		G-->H([7. Phylogenetic Tree]);
-		H-->I([8. Export]);
+		F-->G([6.Filtration]);
+		G-->H([7.Phylogenetic Tree]);
+		H-->I([8.Export]);
 	end
 
 ```
