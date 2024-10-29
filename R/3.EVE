@@ -12,7 +12,7 @@ library(tidyverse)
 # Read in Files
 ## Count data
 ### "merged_data" has samples has 30 columns of metadata followed by columns of ASVs with normalized count data. Samples are rows.
-merged_data <- read.csv("merged_data.csv")
+merged_data <- read.csv("merged_data.csv") # This file is the counts_metadata from 1.DataPrep
 bacteriaTbl <- merged_data[,31:length(merged_data)] # Isolate count data
 bacteriaMat <- as.matrix(bacteriaTbl) # convert to matrix
 
