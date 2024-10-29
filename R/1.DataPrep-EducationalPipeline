@@ -1,0 +1,193 @@
+
+---
+
+# Organizing Data for Phyloseq: A Step-by-Step Guide
+
+This script helps you organize your **biological datasets** (e.g., microbial counts, metadata, taxonomy) into a format suitable for the **`phyloseq`** R package. Phyloseq allows you to analyze and visualize microbiome data. This version includes **comments and visual examples** to make the process clear for beginners.
+
+---
+
+## **Step 1: Set Up the Environment**
+
+Install and load the necessary libraries.
+
+```r
+# Load the required libraries
+library(dplyr)      # Data manipulation
+library(phyloseq)   # Microbiome analysis
+library(vegan)      # Rarefaction analysis
+```
+
+Make sure the **working directory** is set correctly. This is the folder where your data files are stored.
+
+```r
+setwd("~/Desktop/Ofav_SCTLD/Raw_Data/Resequenced_Fastq/")
+```
+
+---
+
+## **Step 2: Load and Inspect Your Files**
+
+### Files used:
+- **Counts data**: Sample-by-feature matrix (e.g., ASV counts per sample).
+- **Metadata**: Information about each sample (e.g., treatment, genotype).
+- **Taxonomy**: Describes which taxa (microbial species) are present.
+
+```r
+counts <- read.csv("table/feature-table.t.csv")
+metadata <- read.csv("Merged-metadata.csv")
+taxonomy <- read.csv("taxonomy/taxonomy.csv")
+
+# Display the first few rows of the taxonomy file
+head(taxonomy)
+```
+
+**Example of a Taxonomy File:**
+
+| Taxon            | Confidence | ASV  |
+|------------------|------------|------|
+| d__Bacteria; p__Proteobacteria | 1.00 | ASV1 |
+| d__Bacteria; p__Actinobacteria | 0.97 | ASV2 |
+
+---
+
+## **Step 3: Clean and Simplify Taxonomy**
+
+We simplify taxonomic names to remove prefixes (like "d__" for domain) and focus only on relevant parts (like species or genus).
+
+```r
+taxonomy <- taxonomy %>%
+  mutate(SimplifiedTaxon = case_when(
+    Confidence >= 0.97 ~ sub(".*s__([^;]+).*", "s__\\1", Taxon),
+    TRUE ~ sub(".*g__([^;]+).*", "g__\\1", Taxon)
+  )) %>%
+  mutate(SimplifiedTaxon = gsub("^[a-z]__", "", SimplifiedTaxon)) # Remove prefixes
+
+head(taxonomy)  # Preview the simplified taxonomy
+```
+
+---
+
+## **Step 4: Organize Metadata**
+
+We need to ensure that **metadata is consistent** across datasets. If some genotypes are missing, the decision is whether to keep or remove them.
+
+```r
+# Load symbiont and genotype data
+symbiont_data <- read.csv("AprilGenotypeSymbiont.csv")
+genotype_data <- read.csv("GenotypeSusceptibility.csv")
+
+# Merge symbiont and genotype data by 'DEP.Genotype'
+combined_metadata <- merge(symbiont_data, genotype_data, by = "DEP.Genotype", all = TRUE)
+
+# Preview the combined metadata
+head(combined_metadata)
+```
+
+---
+
+## **Step 5: Match and Merge Counts with Metadata**
+
+We need to ensure that **every sample in the counts file** matches a sample in the metadata.
+
+```r
+# Check for unmatched samples
+unmatched_counts <- setdiff(counts$SampleID, metadata$SampleID)
+print(unmatched_counts)
+
+# Merge counts with metadata
+counts_metadata <- merge(metadata, counts, by = "SampleID", all = TRUE)
+```
+
+---
+
+## **Step 6: Filter Low-Quality Samples**
+
+Samples with **fewer than 5141 reads** (as determined by earlier quality control) will be filtered out to ensure data quality.
+
+```r
+# Calculate total reads per sample
+row_sums <- rowSums(counts_metadata[, 30:ncol(counts_metadata)])
+
+# Filter out samples with low read counts
+filtered_data <- counts_metadata[row_sums > 5141, ]
+
+# Visualize read depth distribution
+hist(row_sums, breaks = 20, main = "Read Depth Distribution", xlab = "Reads per Sample")
+```
+
+---
+
+## **Step 7: Handle Duplicates**
+
+Sometimes samples may appear more than once due to **genotype updates**. We’ll remove duplicates by keeping only the first occurrence.
+
+```r
+# Remove duplicates by 'SampleID'
+counts_metadata_clean <- counts_metadata[!duplicated(counts_metadata$SampleID), ]
+
+# Create a new identifier by combining genotype and sample IDs
+counts_metadata_clean$DEPSampleID <- paste(counts_metadata_clean$DEP.Genotype, counts_metadata_clean$SampleID, sep = "_")
+
+# Preview the cleaned dataset
+head(counts_metadata_clean)
+```
+
+---
+
+## **Step 8: Prepare Files for Phyloseq**
+
+Before creating the phyloseq object, we need to ensure **dimensions align**. The **taxonomy table, metadata, and counts** must have matching rows and columns.
+
+```r
+# Check dimensions
+dim(counts)  # Counts matrix
+dim(metadata)  # Metadata
+dim(taxonomy)  # Taxonomy
+
+# Convert data to the required phyloseq format
+otu_table <- otu_table(as.matrix(counts[, -1]), taxa_are_rows = TRUE)
+sample_data <- sample_data(metadata)
+tax_table <- tax_table(as.matrix(taxonomy))
+
+# Create the phyloseq object
+ps <- phyloseq(otu_table, tax_table, sample_data)
+ps  # Print the phyloseq object
+```
+
+---
+
+## **Step 9: Visualize the Phyloseq Object**
+
+You can now use **phyloseq functions** to analyze and visualize your microbiome data. Here's an example rarefaction plot to assess species richness across samples.
+
+```r
+library(vegan)
+
+# Calculate rarefaction
+D.spec <- specnumber(counts_metadata[, 30:ncol(counts_metadata)])
+D.specrare <- min(rowSums(counts_metadata[, 30:ncol(counts_metadata)]))
+Srare <- rarefy(counts_metadata[, 30:ncol(counts_metadata)], D.specrare)
+
+# Plot rarefaction curve
+plot(D.spec, Srare, xlab = "Observed Species", ylab = "Rarefied Species")
+abline(0, 1)
+```
+
+---
+
+## **Conclusion**
+
+This script walks you through the entire process of preparing your data for **phyloseq analysis**, from loading and cleaning files to visualizing the results. After completing these steps, you’ll be ready to analyze microbial diversity, community composition, and more using phyloseq’s powerful tools.
+
+---
+
+### **Visual Example of Phyloseq Alignment:**
+
+| **Table**      | **Rows** | **Columns**      |
+|----------------|----------|------------------|
+| OTU Table      | 1000     | 300 Samples      |
+| Taxonomy Table | 1000     | 8 Taxa Levels    |
+| Metadata Table | 300      | 29 Metadata Items |
+
+Make sure **these tables align** before running the final phyloseq step.
