@@ -19,12 +19,12 @@ bacteriaMat <- as.matrix(bacteriaTbl) # convert to matrix
 ### Log Transform
 rownames(bacteriaMat) <- merged_data$DEPSampleID
 dim(bacteriaMat)
-summary(log10(bacteriaMat[,1:321]+1)) #seeing what kind of transformation is ideal. EVE recommends log transformed
+summary(log10(bacteriaMat[,1:321]+1)) #321 is the numnber of ASVs (columns) seeing what kind of transformation is ideal. EVE recommends log transformed
 bacteriaMat <- log10(bacteriaMat[,1:321]+1) #applying the log transform
 bacteriaMat <- t(bacteriaMat)
 
 ### Species Tree
-speciesTree <- read.tree(file="../Newick_New.txt") # April "New" Genotype IDs
+speciesTree <-read.tree(text="(Mcav:0.193061,(Ofav:0.292692,(Acer:0.0851491,Past:0.108313)0.914916:0.389916)1:0.193061);")
 plot(speciesTree, cex=0.5)
 speciesTree$tip.label
 speciesTree$edge.length
