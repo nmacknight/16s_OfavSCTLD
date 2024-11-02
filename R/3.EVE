@@ -19,8 +19,8 @@ bacteriaMat <- as.matrix(bacteriaTbl) # convert to matrix
 ### Log Transform
 rownames(bacteriaMat) <- merged_data$DEPSampleID
 dim(bacteriaMat)
-summary(log10(bacteriaMat[,1:321]+1)) #321 is the numnber of ASVs (columns) seeing what kind of transformation is ideal. EVE recommends log transformed
-bacteriaMat <- log10(bacteriaMat[,1:321]+1) #applying the log transform
+# summary(log10(bacteriaMat[,1:321]+1)) #321 is the numnber of ASVs (columns). seeing what kind of transformation is ideal. EVE recommends log transformed
+bacteriaMat <- log10(bacteriaMat[,1:321]+1) # applying the log transform #321 is the numnber of ASVs (columns).
 bacteriaMat <- t(bacteriaMat)
 
 ### Species Tree
@@ -33,6 +33,7 @@ speciesTree$edge.length
 colnames(bacteriaMat)
 
 # remove the trailing number so that we get a vector with the species for each column
+# The purpose here is to take the time to make sure that the colSpecies matches the speciesTree$tip.label. So you may need to reformat your colnames in bacteriaMat to make this so.
 colSpecies <- sub("_.*$","",colnames(bacteriaMat))
 colSpecies
 
