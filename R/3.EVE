@@ -1,119 +1,467 @@
+Executing the Expression Variance and Evolution Model (EVE):
+
 # Expression Variance and Evolution Model - EVE
 
-EVE Publication: https://pubmed.ncbi.nlm.nih.gov/26169525/
+EVE Publication: [https://pubmed.ncbi.nlm.nih.gov/26169525/](https://pubmed.ncbi.nlm.nih.gov/26169525/)
 
 ## Libraries
+```{r setup, message=FALSE, warning=FALSE}
 devtools::install_gitlab("sandve-lab/evemodel")
 library(evemodel)
 library(ape)
 library(tidyverse)
+```
+
+## Read in Files
+### Count Data
+```{r read_data}
+counts_metadata <- read.csv("counts_metadata.csv") # Counts and metadata
 
 
-# Read in Files
-## Count data
-### "merged_data" has samples has 30 columns of metadata followed by columns of ASVs with normalized count data. Samples are rows.
-merged_data <- read.csv("merged_data.csv") # This file is the counts_metadata from 1.DataPrep
-bacteriaTbl <- merged_data[,31:length(merged_data)] # Isolate count data
-bacteriaMat <- as.matrix(bacteriaTbl) # convert to matrix
+# Match Names
+counts_metadata$SampleID
+counts_metadata$Species
 
-### Log Transform
-rownames(bacteriaMat) <- merged_data$DEPSampleID
-dim(bacteriaMat)
-# summary(log10(bacteriaMat[,1:321]+1)) #321 is the numnber of ASVs (columns). seeing what kind of transformation is ideal. EVE recommends log transformed
-bacteriaMat <- log10(bacteriaMat[,1:321]+1) # applying the log transform #321 is the numnber of ASVs (columns).
+# Create a new column with combined SampleID and Species
+counts_metadata$Combined_ID <- paste(counts_metadata$Species, counts_metadata$SampleID, sep = "-")
+counts_metadata <- counts_metadata[, c("Combined_ID", setdiff(names(counts_metadata), "Combined_ID"))]
+
+# Extract Counts and Convert to Matrix
+bacteriaTbl <- counts_metadata[,21:length(counts_metadata)] # Isolate count data
+bacteriaMat <- as.matrix(bacteriaTbl) # Convert to matrix
+
+# Log Transform
+rownames(bacteriaMat) <- counts_metadata$Combined_ID
+bacteriaMat <- log10(bacteriaMat[,1:11627]+1) # Applying log transform
 bacteriaMat <- t(bacteriaMat)
+```
 
 ### Species Tree
-speciesTree <-read.tree(text="(Mcav:0.193061,(Ofav:0.292692,(Acer:0.0851491,Past:0.108313)0.914916:0.389916)1:0.193061);")
-plot(speciesTree, cex=0.5)
-speciesTree$tip.label
-speciesTree$edge.length
+```{r species_tree}
+PacificTree <- read.tree(text="(Homophyllia_bowerbanki:0.000571477,(((Echinophyllia_aspera:0.000998686,Echinophyllia_orpheensis:0.000189930)1.000:0.113365634,(((Dipsastraea_pallida:0.002138482,(Cyphastrea_microphthalma:0.046942114,Cyphastrea_serailia:0.015696278)1.000:0.090385872)0.598:0.017667090,(Platygyra_sinensis:0.145890774,Lobophyllia_hemprichii:0.015454463)0.962:0.020891755)1.000:0.089300666,(((((Merulina_ampliata:0.053715964,(Goniastrea_edwardsi:0.001342001,Goniastrea_favulus:0.001557977)1.000:0.158376468)0.992:0.070451871,(Leptastrea_transversa:0.029442989,Echinopora_horrida:0.002596429)0.766:0.001881104)0.938:0.028944787,(((Echinopora_mammiformis:0.002036505,Astrea_curta:0.078152362)0.722:0.001782957,(Diploastrea_heliopora:0.010315456,Echinopora_lamellosa:0.020332396)1.000:0.119361885)0.746:0.020473683)0.757:0.013991883)1.000:0.021837308,((((Pocillopora_damicornis:0.027338674,Stylophora_pistillata:0.031383227)1.000:0.068775126,((Pavona_venosa:0.036177912,(((Porites_lutea:0.001009226,(Porites_cylindrica:0.004989955,Porites_lobata:0.001816239)0.000:0.000000005)1.000:0.022593575,(Turbinaria_reniformis:0.034755050,(Turbinaria_peltata:0.008395317)1.000:0.215406489)0.989:0.024223661)1.000:0.036533572,((((Acropora_humilis:0.002748596,Heliopora_coerulea:0.371493045)0.000:0.000012571,(Acropora_cytherea:0.001379213,Acropora_millepora:0.000894750)0.000:0.000000005)0.984:0.010295750,Acropora_hyacinthus:0.061763883)1.000:0.067618734,((Galaxea_fascicularis:0.000000006,Galaxea_astreata:0.003967913)1.000:0.018370608,(Pachyseris_speciosa:0.000340255,Pachyseris_rugosa:0.003749965)0.988:0.008653823)1.000:0.026350346)1.000:0.049989414)1.000:0.057182693)1.000:0.061135949,(Chlorurus_spilurus:0.269629974,Turbinaria_Unverified:0.403337413)1.000:0.083097694)1.000:0.041606411)1.000:0.028515003,(Psammocora_contigua:0.008904391,Psammocora_digitata:0.005379607)1.000:0.048811668)1.000:0.018790674,Caulastraea_furcata:0.006212951)0.832:0.002540617)0.998:0.011557079,(Physogyra_lichtensteini:0.060618299)0.000:0.004383237)0.116:0.004369277)0.308:0.022540512)0.880:0.008500834,((Favites_abdita:0.028154401)0.909:0.005511718,Hydnophora_exesa:0.033541456)0.904:0.006999047)1.000:0.016150326);
+")
+plot(PacificTree, cex=0.5)
+PacificTree$tip.label
 
-# the columns in the expression matrix are:
-colnames(bacteriaMat)
+```
 
-# remove the trailing number so that we get a vector with the species for each column
-# The purpose here is to take the time to make sure that the colSpecies matches the speciesTree$tip.label. So you may need to reformat your colnames in bacteriaMat to make this so.
-colSpecies <- sub("_.*$","",colnames(bacteriaMat))
-colSpecies
 
-## Running the beta shared test
-### The beta shared test, (a.k.a. phylogenetic ANOVA), can detect genes with increased or decreased ratios of expression divergence to diversity (this ratio is the beta parameter). The model can be used for purposes such as identifying genes with high expression divergence between species as candidates for expression level adaptation, and genes with high expression diversity within species as candidates for expression level conservation and or plasticity.
-### This works by finding a shared beta that gives the maximum likelihood across all genes and comparing that to the model where the beta is fitted to each individual gene.
-### With <100 samples this should take about 20 minutes. I ran it also with 1200+ samples and it took 5.5 days with 16gb of available ram and an M1 chip. 
-res <- betaSharedTest(tree = speciesTree, gene.data = bacteriaMat, colSpecies = colSpecies)
+## Beta Shared Test
+```{r beta_shared_test}
+colSpecies <- sub("-.*$","",colnames(bacteriaMat))
+res <- betaSharedTest(tree = PacificTree, gene.data = bacteriaMat, colSpecies = colSpecies)
 res$sharedBeta
+```
 
-
-# plot likelihood ratio test statistic histogram
-hist(res$LRT,freq = F)
-# Plot the chi-squared distribution with one degree of freedom
-x = seq(0.5,10,length.out = 100)
-y = dchisq(x,df = 1)
-lines(x,y,col="red")
-
+```{r,results='hide',tidy=TRUE}
 # P-value can then be calculated using:
 pval = pchisq(res$LRT,df = 1,lower.tail = F)
 
-# Combine LRT, beta, theta, sigma2, alpha:
+# The shared beta:
+res$sharedBeta
+# [1] 0.3615476
+log(0.3615476)
+# [1] -1.017362
+
+#Combine LRT, beta, theta, sigma2, alpha:
 head(cbind(res$LRT,res$indivBetaRes$par,pval))
-EVE_results <- cbind(res$LRT,res$indivBetaRes$par,pval,bacteriaMat[,1:1209])
-#bacteria
-rownames(EVE_results) <- rownames(bacteriaMat)
+colnames(exprMat)
+dim(exprMat)
+# [1]  705   77
+a <- cbind(res$LRT,res$indivBetaRes$par,pval,exprMat[,1:77])
+rownames(a) <- exprTbl$Orthogroup
 
 # Give Column Name to LRT column
-colnames(EVE_results)
-colnames(EVE_results)[colnames(EVE_results)==""] <- "LRT"
-head(EVE_results)
+colnames(a)
+colnames(a)[colnames(a)==""] <- "LRT"
+head(a)
+EVE_results <- as.data.frame(a)
+EVE_results <- tibble::rownames_to_column(EVE_results, "Orthogroup")
 
-# Export results
-write.csv(EVE_results, file="EVE_results.csv")
-
-
-### Filter Signficant Bacteria
-
-# Visualize LRT v Beta by volcano plot for gene data
-colnames(EVE_results)[colnames(EVE_results)=="X"] <- "ASV"
-colnames(EVE_results)
-head(EVE_results)
-EVE_results$ASV <- sub("^X", "", EVE_results$ASV) # Remove the X at the beginning of some ASV IDs.
-EVE_results_sig <- EVE_results %>% filter(pval <= 0.1) #Conservative p-value  filtration of 0.1
-
-write.csv(EVE_results_sig, file="Signficant EVE Bacteria.csv")
-
-### Prepare for Visualization
-EVE_results$type <- ifelse(EVE_results$beta<res$sharedBeta,"Lineage Specific","Highly Variable")
-EVE_results$significant <- ifelse(EVE_results$pval<=0.1,"Significant","Not Significant")
+EVE_results$type <- ifelse(EVE_results$beta<0.3615476,"Lineage Specific","Highly Variable")
+EVE_results$significant <- ifelse(EVE_results$pval<=0.05,"Significant","Not Significant")
 EVE_results$category <- ifelse(EVE_results$significant == "Significant",EVE_results$type,"NS")
 colnames(EVE_results)
 EVE_results <- EVE_results %>% relocate(type, .after = pval)
 EVE_results <- EVE_results %>% relocate(significant, .after = type)
 EVE_results <- EVE_results %>% relocate(category, .after = significant)
 
+write.csv(EVE_results, file="/path/to/EVEData/EVE_results_Bacteria_Orthogroups.csv",row.names = FALSE)
 
-log(res$sharedBeta) # 3.70731
-EVE_results_sig <- EVE_results %>% filter(pval <= 0.1)
-
+#Visualize LRT v Beta by volcano plot for gene data
+Shared_EVE <- read.csv("/path/to/EVEData/EVE_results_Bacteria_Orthogroups.csv")
+Shared_EVE_sig <- Shared_EVE %>% filter(pval <= 0.05)
+write.csv(Shared_EVE_sig, file="/path/to/EVEData/Signficant_EVE_results_Bacteria_Orthogroups.csv")
 # Make a basic volcano plot
-EVE_results_sig_LS <- EVE_results_sig %>% filter(log(beta)< (log(res$sharedBeta)))
-dim(EVE_results_sig_LS)  #174
-EVE_results_sig_HV <- EVE_results_sig_sig %>% filter(log(beta)> (log(res$sharedBeta)))
-dim(EVE_results_sig_HV)  #15
+Shared_EVE_LS <- Shared_EVE_sig %>% filter(log(beta)< (-1.017362))
+dim(Shared_EVE_LS)  #26
+Shared_EVE_HV <- Shared_EVE_sig %>% filter(log(beta)> (-1.017362))
+dim(Shared_EVE_HV)  #98
+  #  total
+```
 
-p <- ggplot(data = EVE_results,
-            aes(x=log(beta),y=-log(pval),color=type))+
+```{r EVE_volcano,fig.height=6,fig.width=6,dpi=300}
+p <- ggplot(data = Shared_EVE,
+       aes(x=log(beta),y=-log(pval),color=category))+
   geom_point()+
   scale_color_manual(values=c("#f37225","#00b9e3","black"))+
-  geom_vline(xintercept = 3.971168, col="black", linetype="dashed")+
-  annotate("text", x = 7, y = 245, label = "log(shared beta)", size = 3)+
-  geom_hline(yintercept = -log(0.1), col="black",linetype = "dashed")+
-  annotate("text", x = 24, y = 10, label = "p = 0.1", size = 3)+
-  xlim(-1,25)+
-  ylim(-5,250)+
+  geom_vline(xintercept = -1.017362, col="black", linetype="dashed")+
+  annotate("text", x = 0.9, y = 9.5, label = "Shared beta", size = 3)+
+  geom_hline(yintercept = -log(0.05), col="black",linetype = "dashed")+
+  annotate("text", x = -4, y = 2.5, label = "p = 0.05", size = 3)+
+  xlim(-5,5)+
   theme_light()
-p + labs(color = "EVE Category",title = "EVE Volcano Plot",subtitle = "# Lineage Specific Bacteria and # Highly Variable Bacteria") +
+p + labs(color = "EVE Gene Category",title = "EVE Genes Volcano Plot",subtitle = "277 Lineage-Specific and 651 Highly Variable Genes") +
   theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(size = 9))
+```
+
+## Highly Variable Genes
+
+```{r,results='hide',tidy=TRUE}
+sig_EVE <- read.csv("/path/to/EVEData/Signficant_EVE_results_Bacteria_Orthogroups.csv")
+colnames(sig_EVE)
+sig_EVE <- sig_EVE[,c(2,7,8,11)]   #Orthogroup,beta, pval, category
+dim(sig_EVE)   #928 significant EVE genes
+names(sig_EVE)
+rlogs <- read.csv("/path/to/EVEData/treatment_rlog.csv")
+names(rlogs)
+colnames(rlogs)[1] <- "Orthogroup"
+sig_EVE_rlogs <- left_join(sig_EVE,rlogs,by="Orthogroup")    #928
+dim(sig_EVE_rlogs)
+names(sig_EVE_rlogs)
+write.csv(sig_EVE_rlogs,file="/path/to/EVEData/Signficant_EVE_results_Bacteria_Orthogroups_rlogs.csv")
+
+plasticGenes <- subset(sig_EVE_rlogs, sig_EVE$category == "Highly Variable")
+names(plasticGenes)
+plasticGenes <- plasticGenes[,-c(2:4)]
+dim(plasticGenes)
+# [1] 98  78
+names(plasticGenes)
+t_plasticGenes <- setNames(data.frame(t(plasticGenes[,-1])), plasticGenes[,1])
+row.names(t_plasticGenes)
+t_plasticGenes <- tibble::rownames_to_column(t_plasticGenes, "SampleID")
+
+label <- read.csv("/path/to/EVEData/MetaData.csv")
+colnames(label)
+colnames(t_plasticGenes)
+#label <- label[-c(53),c(3,4,5,7,8)] # remove pstr_d8; keep name,treatment,status,LGR,dominant_clade
+HV_metadata <- merge(label,t_plasticGenes,by="SampleID")
+HV_metadata
+dim(HV_metadata)
+# [1]  70 668
+write.csv(HV_metadata,file="/path/to/EVEData/highlyVariable_rlogs_orthogroup.csv")
+```
+# HV PCA
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+
+# Assume HV_metadata is already loaded and cleaned
+# Select only numeric columns for PCA (remove metadata columns)
+numeric_data <- HV_metadata[,18:length(HV_metadata)]
+
+# Perform PCA
+pca_results <- prcomp(numeric_data, scale. = TRUE)
+
+# Calculate the percentage of variation explained by each principal component
+percent_variance <- round(100 * (pca_results$sdev^2 / sum(pca_results$sdev^2)), 1)
+
+# Create a data frame with the PCA results and Coral.Species
+pca_data <- as.data.frame(pca_results$x)  # Extract the PCA coordinates
+pca_data$Coral.Species <- HV_metadata$Coral.Species  # Add Coral.Species for coloring
+pca_data$SampleID <- HV_metadata$SampleID  # Optionally add SampleID for labeling
+
+# Plot the PCA results using ggplot2
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Coral.Species)) +
+  geom_point(size = 3, alpha = 0.8) +  # Points representing samples
+  stat_ellipse(level = 0.95, linetype = 2) +  # Add ellipses around species groups
+  labs(
+    title = "PCA of HV_metadata", 
+    x = paste0("PC1: ", percent_variance[1], "% variance"), 
+    y = paste0("PC2: ", percent_variance[2], "% variance")
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank()) +
+  scale_color_brewer(palette = "Set2")  # Use a nice color palette for species
+
+```
+
+## Lineage-Specific Genes
+
+```{r,results='hide',tidy=TRUE}
+
+LSGenes <- subset(sig_EVE_rlogs, sig_EVE$category == "Lineage Specific")
+names(LSGenes)
+LSGenes <- LSGenes[,-c(2:4)]
+dim(LSGenes)
+# [1] 277  77
+names(LSGenes)
+t_LSGenes <- setNames(data.frame(t(LSGenes[,-1])), LSGenes[,1])
+row.names(t_LSGenes)
+t_LSGenes <- tibble::rownames_to_column(t_LSGenes, "SampleID")
+
+label <- read.csv("/path/to/EVEData/MetaData.csv")
+colnames(label)
+colnames(t_LSGenes)
+#label <- label[-c(53),c(3,4,5,7,8)] # remove pstr_d8; keep name,treatment,status,LGR,dominant_clade
+LS_metadata <- merge(label,t_LSGenes,by="SampleID")
+LS_metadata
+dim(LS_metadata)
+# [1]  70 294
+write.csv(LS_metadata,file="/path/to/EVEData/LineageSpecific_rlogs_orthogroup.csv")
+```
+### LS PCA
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+
+# Assume HV_metadata is already loaded and cleaned
+# Select only numeric columns for PCA (remove metadata columns)
+numeric_data <- LS_metadata[,18:length(LS_metadata)]
+
+# Perform PCA
+pca_results <- prcomp(numeric_data, scale. = TRUE)
+
+# Calculate the percentage of variation explained by each principal component
+percent_variance <- round(100 * (pca_results$sdev^2 / sum(pca_results$sdev^2)), 1)
+
+# Create a data frame with the PCA results and Coral.Species
+pca_data <- as.data.frame(pca_results$x)  # Extract the PCA coordinates
+pca_data$Coral.Species <- LS_metadata$Coral.Species  # Add Coral.Species for coloring
+pca_data$SampleID <- LS_metadata$SampleID  # Optionally add SampleID for labeling
+
+# Plot the PCA results using ggplot2
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Coral.Species)) +
+  geom_point(size = 3, alpha = 0.8) +  # Points representing samples
+  stat_ellipse(level = 0.95, linetype = 2) +  # Add ellipses around species groups
+  labs(
+    title = "PCA of LS_metadata", 
+    x = paste0("PC1: ", percent_variance[1], "% variance"), 
+    y = paste0("PC2: ", percent_variance[2], "% variance")
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank()) +
+  scale_color_brewer(palette = "Set2")  # Use a nice color palette for species
+
+```
+
+### LS - Hierarchical Tree
+```{r}
+# Load required libraries
+library(ggplot2)
+library(ggdendro)
+library(dendextend)
+library(dplyr)
+
+# Assume LS_metadata is already loaded and cleaned
+# Select only numeric columns for hierarchical clustering (remove metadata columns)
+numeric_data <- LS_metadata[,18:length(LS_metadata)]
+
+# Standardize the data (optional but recommended for numeric data of different scales)
+numeric_data_scaled <- scale(numeric_data)
+
+# Define the methods we want to compare
+methods <- c("complete", "average", "single", "ward.D2")
+
+# Create an empty list to store dendrograms
+dend_list <- list()
+
+# Loop over the methods and create hierarchical clusters
+for (method in methods) {
+  # Compute distance matrix
+  distance_matrix <- dist(numeric_data_scaled, method = "euclidean")
+  
+  # Perform hierarchical clustering with different methods
+  hclust_results <- hclust(distance_matrix, method = method)
+  
+  # Convert the hclust object into a dendrogram
+  dend <- as.dendrogram(hclust_results)
+  
+  # Add color to branches based on Coral.Species
+  species_colors <- as.factor(LS_metadata$Coral.Species)
+  labels_colors(dend) <- as.numeric(species_colors)
+  
+  # Label the dendrogram with SampleID
+  labels(dend) <- LS_metadata$SampleID
+  
+  # Store dendrogram in the list
+  dend_list[[method]] <- dend
+}
+
+# Plot the dendrograms side by side
+par(mfrow = c(2, 2))  # Create a 2x2 layout for plotting multiple trees
+
+# Loop through the methods and plot each dendrogram
+for (method in methods) {
+  plot(dend_list[[method]], main = paste("Dendrogram -", method, "linkage"), 
+       ylab = "Height", cex = 0.8)  # Adjust text size for labels
+}
+
+# Reset plotting layout
+par(mfrow = c(1, 1))
+
+# Add a legend for species colors
+# legend("topright", legend = levels(species_colors), 
+#       col = 1:length(levels(species_colors)), 
+#       pch = 19, title = "Coral Species")
+
+```
+# LS - Hierarchical Tree - Single Linkage
+```{r}
+#Average linkage: Measures the average distance between clusters.
+
+# Load required libraries
+library(ggplot2)
+library(ggdendro)
+library(dendextend)
+library(dplyr)
+
+# Assume LS_metadata is already loaded and cleaned
+# Select only numeric columns for hierarchical clustering (remove metadata columns)
+numeric_data <- LS_metadata[,18:length(LS_metadata)]
+
+# Standardize the data (optional but recommended for numeric data of different scales)
+numeric_data_scaled <- scale(numeric_data)
+
+# Compute distance matrix
+distance_matrix <- dist(numeric_data_scaled, method = "euclidean")
+
+# Perform hierarchical clustering using "average" linkage
+hclust_results <- hclust(distance_matrix, method = "single")
+
+# Convert the hclust object into a dendrogram
+dend <- as.dendrogram(hclust_results)
+
+# Add color to branches based on Coral.Species
+species_colors <- as.factor(LS_metadata$Coral.Species)
+labels_colors(dend) <- as.numeric(species_colors)
+
+# Label the dendrogram with SampleID
+labels(dend) <- LS_metadata$SampleID
+
+# Plot the dendrogram
+plot(dend, main = "Dendrogram - Single Linkage", ylab = "Height", cex = 0.8)
+
+# Add a legend for species colors
+legend("topright", legend = levels(species_colors), 
+       col = 1:length(levels(species_colors)), 
+       pch = 19, title = "Coral Species")
 
 
-write.csv(EVE_results_sig_LS, "EVE_LS.csv")
-write.csv(EVE_results_sig_HV, "EVE_HV.csv")
+```
+
+```{r,fig.height=8,fig.width=3,dpi=300}
+# Load required libraries
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(ggdendro)
+library(dendextend)
+
+# Create the hierarchical tree plot
+numeric_data <- LS_metadata[,18:length(LS_metadata)]
+numeric_data_scaled <- scale(numeric_data)
+distance_matrix <- dist(numeric_data_scaled, method = "euclidean")
+hclust_results <- hclust(distance_matrix, method = "average")
+dend <- as.dendrogram(hclust_results)
+
+# Color branches by Coral.Species
+species_colors <- as.factor(LS_metadata$Coral.Species)
+dend <- color_branches(dend, k = length(unique(species_colors)), groupLabels = FALSE)
+
+# Label the dendrogram with Species_Outcome
+labels(dend) <- LS_metadata$Species_Outcome
+
+# Convert to a plot-ready object using ggdendro
+ggdend <- ggdendro::dendro_data(dend)
+
+# Plot the dendrogram using ggplot2
+tree_plot <- ggplot(ggdend$segments) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_text(data = ggdend$labels, aes(x = x, y = y, label = label, color = as.factor(species_colors)), hjust = 1, size = 3) +
+  labs(title = "Dendrogram - Average Linkage", y = "Height") +
+  geom_text(data = ggdend$labels, aes(x = x, y = y, label = label, color = as.factor(species_colors)),
+            hjust = 1, size = 3, angle = 30) +  # This line adds angled labels
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  scale_color_brewer(palette = "Set2")
+
+# Display the plot
+print(tree_plot)
+
+
+# LS PCA plot
+pca_results <- prcomp(numeric_data, scale. = TRUE)
+percent_variance <- round(100 * (pca_results$sdev^2 / sum(pca_results$sdev^2)), 1)
+pca_data <- as.data.frame(pca_results$x)
+pca_data$Coral.Species <- LS_metadata$Coral.Species
+LS_PCA_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Coral.Species)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = 2) +
+  labs(
+    title = "Lineage-Specific Genes", 
+    x = paste0("PC1: ", percent_variance[1], "% variance"), 
+    y = paste0("PC2: ", percent_variance[2], "% variance")
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_color_brewer(palette = "Set2")
+
+# Volcano plot
+volcano_plot <- ggplot(data = Shared_EVE, aes(x=log(beta), y=-log(pval), color=category)) +
+  geom_point() +
+  scale_color_manual(values=c("#f37225","#00b9e3","black")) +
+  geom_vline(xintercept = -1.093945, col="black", linetype="dashed") +
+  annotate("text", x = 0.9, y = 9.5, label = "Shared beta", size = 3) +
+  geom_hline(yintercept = -log(0.05), col="black", linetype = "dashed") +
+  annotate("text", x = -4, y = 2.5, label = "p = 0.05", size = 3) +
+  xlim(-5, 5) +
+  theme_light() +
+  labs(color = "EVE Gene Category", title = "EVE Genes Volcano Plot", subtitle = "43 Lineage-Specific and 115 Highly Variable Genes") +
+  theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(size = 9)) +
+  theme(legend.position = "none")  # This line removes the legend
+
+
+# HV PCA plot
+numeric_data_HV <- HV_metadata[,18:length(HV_metadata)]
+pca_results_HV <- prcomp(numeric_data_HV, scale. = TRUE)
+percent_variance_HV <- round(100 * (pca_results_HV$sdev^2 / sum(pca_results_HV$sdev^2)), 1)
+pca_data_HV <- as.data.frame(pca_results_HV$x)
+pca_data_HV$Coral.Species <- HV_metadata$Coral.Species
+HV_PCA_plot <- ggplot(pca_data_HV, aes(x = PC1, y = PC2, color = Coral.Species)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(level = 0.95, linetype = 2) +
+  labs(
+    title = "Highly Variable Genes", 
+    x = paste0("PC1: ", percent_variance_HV[1], "% variance"), 
+    y = paste0("PC2: ", percent_variance_HV[2], "% variance")
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")+
+  scale_color_brewer(palette = "Set2")
+
+# Arrange the plots using gridExtra
+combined_plot <- grid.arrange(
+  tree_plot, 
+  arrangeGrob(LS_PCA_plot, volcano_plot, HV_PCA_plot, ncol = 3), 
+  heights = c(1, 2),
+  ncol = 1
+)
+
+combined_plot <- grid.arrange(
+ # tree_plot, 
+  arrangeGrob(volcano_plot, LS_PCA_plot, HV_PCA_plot, nrow = 3), 
+  #heights = c(1, 2),
+  ncol = 1
+)
+
+
+# Save the combined figure (optional)
+ggsave("/path/to/EVEData/EVE_Summary_BacteriaOrthogroups_Column.png", combined_plot, width = 3, height = 8)
+
+```
+
