@@ -43,12 +43,42 @@ mkdir ./DemultiplexedSeqs
 mv ./Fastq/FastqSummaryF1L1.txt ./../
 mv ./Fastq/Undetermined* ./../
 ```
+## Installing Qiime2
+First things first - installing Qiime2. Click this URL to open the [Qiime2 Installation instructions](https://docs.qiime2.org/2024.5/install/native/) that I will walk you through. 
+
+You will need to make sure conda is installed on your computer which is outside the scope of this tutorial. Conda is a tool that helps you easily manage software and libraries on your computer, especially for tasks like programming or data analysis. So its incredibly common and not just unique to Qiime2 and you will likely need it again in the future.
+
+Once you have conda and have opened the [Qiime2 Installation instructions](https://docs.qiime2.org/2024.5/install/native/) you will see tabs under "Qiime2 Amplicon Distribution". Select the tab that represents your computer. For me, it is the "macOS (Apple Silicon)". I know this because my computer has an M1 chip. I made the mistake a long time ago of trying it install with the other "macOS (intel) and OS X" instructions and received lots of errors.
+
+![image](https://github.com/user-attachments/assets/09494a0f-c4ec-463e-8656-e77427fca218)
+
+Once you have identified your tab that matches your computer, open terminal (on a mac), and copy and paiste the greyed installation code into your terminal. This will initiate Qiime2 installation, activate the environment, and configure the environment. 
+
+So for my macOS (Apple Silicon) computer the installation instructions are:
+```
+CONDA_SUBDIR=osx-64 conda env create -n qiime2-amplicon-2024.5 --file https://data.qiime2.org/distro/amplicon/qiime2-amplicon-2024.5-py39-osx-conda.yml
+conda activate qiime2-amplicon-2024.5
+conda config --env --set subdir osx-64
+```
+
+I can then test my installation worked with:
+```
+qiime --help
+
+```
+Now you have installed qiime2, activated it and are ready to run the qiime2 functions that require qiime2 activation. 
 
 ## Activate Qiime2 
+***Your Qiime2 version will likely be more recent than mine.***
+> If you have just installed and activated qiime2, you do not need to re-activate it with this code below. However, more likely you have just hopped back on your computer and need to activate qiime2 and can use the code below to do so.
+
+> [!IMPORTANT]
+> Be sure to update the "qiime2-2022.11" with your specific version of qiime2. For example it could be "qiime2-amplicon-2024.5" (a more recent version as of Dec 2024) making the complete line of code you should enter into terminal to activate qiime2: "conda activate qiime2-amplicon-2024.5"
+
+To activate qiime2:
 ```
 conda activate qiime2-2022.11
 ```
-***Your Qiime2 version will likely be more recent than mine.***
 
 # 1. Import Data
 
