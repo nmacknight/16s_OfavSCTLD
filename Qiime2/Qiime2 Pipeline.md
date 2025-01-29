@@ -6,7 +6,13 @@ Leveraging 192 unique barcodes, we performed the library prep in house and seque
 
 > Sequenced the 515F to 806R V4 region of the 16s rRNA on an Illumina MiSeq v3 PE300 with a target read count of 20 Million/run or ~100,000/sample.
 
+
+<details>
+
+<summary>Overview</summary>
+
 ## Overview
+
 ```mermaid
 flowchart TD
 	subgraph  
@@ -29,6 +35,11 @@ flowchart TD
 
 **Note:** Steps 1-3 below was applied to each sequencing run. Rather than combine all 9 runs into one script, I provided simply the first run ("D1D2") to demonstrate how each run was processed. The analysis steps from 1-3 are the same for each run, and then each run is merged together at step 4. 
 
+</details>
+<details>
+
+<summary>Reads from Sequencer</summary>
+
 ## Reads from Sequencer
 
 I hate to kickoff a tutorial without a solid roadmap but the first hurdle is transferring the reads from your sequencer to your server/computer/external hard drive of preference. This process is going to be specific to who your sequencer is. If they are in the USA, its likely they could upload the data to a storage repository equivalent to dropbox, box, or Illumina Basespace. This simply requires you to download by the click of a button. If they are international, it may be a server-to-server transfer using the "curl" command in terminal or you can try FileZilla as suggestions. If you are lost, reach out to your sequencer and hopefully they will have a standard operating procedure on how to transfer data or suggest steps on how to receive the data.
@@ -43,7 +54,13 @@ mkdir ./DemultiplexedSeqs
 mv ./Fastq/FastqSummaryF1L1.txt ./../
 mv ./Fastq/Undetermined* ./../
 ```
+</details>
+<details>
+
+<summary>Installing Qiime2</summary>
+
 ## Installing Qiime2
+
 First things first - installing Qiime2. Click this URL to open the [Qiime2 Installation instructions](https://docs.qiime2.org/2024.5/install/native/) that I will walk you through. 
 
 You will need to make sure conda is installed on your computer which is outside the scope of this tutorial. Conda is a tool that helps you easily manage software and libraries on your computer, especially for tasks like programming or data analysis. So its incredibly common and not just unique to Qiime2 and you will likely need it again in the future.
@@ -79,6 +96,10 @@ To activate qiime2:
 ```
 conda activate qiime2-2022.11
 ```
+</details>
+<details>
+
+<summary>1. Import Data</summary>
 
 # 1. Import Data
 
@@ -118,6 +139,10 @@ qiime tools view ./DemultiplexedSeqs/demux-paired-end.qzv
 
 We will need to remove the adapters before the reads are truncated. To do this, we use Cutadapt in step 2.
 
+</details>
+<details>
+
+<summary>2. Cutadapt</summary>
 
 # 2. Cutadapt :scissors:
 
@@ -168,6 +193,10 @@ qiime tools view ./DemultiplexedSeqs/demux-paired-end-trimmed.qzv
 ```
  Now that you have removed the primers, look at the first 40 nucleotides or so and you can see how the .qzv files differ between demux-paired-end.qzv and demux-paired-end-trimmed.qzv to visually confirm cutadapt removed your primers. 
 
+</details>
+<details>
+
+<summary>3. DADA2</summary>
 
 # 3. DADA2
 
@@ -211,8 +240,20 @@ qiime feature-table tabulate-seqs \
 
 **Note:** In the command below, the "--i-tables" are the directories of where the DADA2 results are stored from running the steps 1-3 for each specific sequencing run. We had 9 sequencing runs, so we ran steps 1-3 for each run, and have 9 unique ouput directories that need to be merged in step 4. 
 
+</details>
+<details>
+
+<summary>4. Merging Sequence Runs (optional)</summary>
 
 # 4. Merging Sequencing Runs
+
+**Why am I merging Sequence Runs, why is it optional, and is it necessary for you?**
+
+This was a large project, sequencing 1600+ samples and we put about 186 samples per "sequencing run". So we have 9 sequencing runs to combine into one dataset. 
+
+So for you, if you have multiple sequencing runs, then use this step 4 to combine the runs. If you only have one sequencing run, then you can skip this step. 
+
+Keep in mind we use a step after this called vsearch to combine identical representative sequences that may be duplicates across sequence runs so they dont appear as unique when they are 100% the same bacteria. 
 
 Making a folder for all this work to go into:
 ```
@@ -275,7 +316,7 @@ qiime feature-table tabulate-seqs \
 ```
 >Run Time <1 min.
 
-## VSearch ##
+## VSearch
 **This vsearch command is clustering sequences that are 100% identical by referencing the merged-rep-seqs and then references the merged-table to ADD the frequencies (counts) of any clustered ASV.
 ```
 qiime vsearch cluster-features-de-novo \
@@ -306,6 +347,10 @@ qiime feature-table tabulate-seqs \
 ```
 > Run Time <1 min.
 
+</details>
+<details>
+
+<summary>5. Taxonomic Classification</summary>
 
 # 5. Taxonomic Classification :paw_prints:
 
@@ -315,7 +360,12 @@ We are using the silva database. There is also the greengenes database. At the t
 
 The qiime2 tutorial has a lot ot say about classifiers i.e. databases. Fortunately, the 515F to 806R is super common in microbial ecology analysis that they have these prepared ones for us. In my [White Plague Qiime2](https://github.com/nmacknight/Qiime2-WhitePlague/blob/main/White%20Plague%202017%20-%20Educational%20Qiime%202Pipeline.md) page you can see that I assembled my own classifier if you are curious on doing that and want an example. I used the greengenes for that one too but that was because at the time of that project (2017) the greengenes was not "outdated". 
 
-Anyways, back to THIS project, where we use the silva database. 
+> [!IMPORTANT]
+> As of January 2025 a different classifier is required and not the "silva-138-99-515-806-nb-classifier.qza" I use in the example in the code below. The correct classifer as of Jan '25 is called "Silva 138 99% OTUs full-length sequences" found on the [Qiime2 Resource website](https://resources.qiime2.org/#naive-bayes-classifiers). I have highlighted the classifier you need to select and download in the image below.
+
+<img width="777" alt="image" src="https://github.com/user-attachments/assets/ec19c527-606f-45b4-8b43-2c78d8176c92" />
+
+Applying the classifer to your representative sequences: 
 ```
 qiime feature-classifier classify-sklearn \
   --i-classifier silva-138-99-515-806-nb-classifier.qza \
@@ -401,6 +451,10 @@ qiime taxa barplot \
 ```
 qiime tools view taxa-bar-BacArc.qzv
 ```
+</details>
+<details>
+
+<summary>6. Filtering</summary>
 
 # 6. Filtering
 
@@ -443,6 +497,10 @@ qiime feature-table filter-seqs \
   --i-table ./RarefactionClustered/table-BacArc_Fr10S195.qza \
   --o-filtered-data ./RarefactionClustered/rep_seqs_BacArc_Fr10S195.qza
 ```
+</details>
+<details>
+
+<summary>7. Phylogenetic Tree</summary>
 
 # 7. Generate a Phylogenetic Tree
 
@@ -456,6 +514,12 @@ qiime phylogeny align-to-tree-mafft-fasttree \
   --o-rooted-tree ./PhylogeneticTree/rooted-tree.qza
 ```
 >RunTime: ~2.5 days!
+> I initially produced the phylogenetic tree BEFORE filtering, which is why it took days! I **Highly** recommend not doing it this way and do it the way that I have prepared in this pipeline, which is to first filter **then** create your phylogenetic tree based on the filtered dataset. Before filtering you may have tens of thousands of ASVs, after filtering you may have a few hundred or thousands ASVS depending on your project. This magnitude of difference in ASVs leads to either minutes to days in phylogenetic tree generation time. Live and learn. 
+
+</details>
+<details>
+
+<summary>8. Export</summary>
 
 # 8. Export
 
