@@ -136,11 +136,18 @@ ggplot(long_metrics, aes(x = Sample_Size, y = Value, color = Phyloseq_Object, gr
 
 ```
 <div align="center">
-<img width="708" alt="image" src="https://github.com/user-attachments/assets/a6da00ee-e4b2-4fc5-8c3e-40020cd8ba20" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/a6da00ee-e4b2-4fc5-8c3e-40020cd8ba20" />
 </div>
 
 > Conclusion: There is definitely a strong effect of sample size and the metrics do begin to plateua, certainly by 100 samples, arguable by 50 we see saturation dependent on the metric. So because some of these phyloseq objects have 8-14 samples, we will need to curate larger phyloseq objects and revisit the questions we can ask.
 
+Stratified Genotype Sampling:
+> Each genotype is sampled at least once, then ensuring each is sampled at least twice (if possible), before allowing any further repetitions
+> Effectively the same outcome. Just testing.
+<div align="center">
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/59b1a2c4-c760-411c-9241-851b539250e8" />
+
+</div>
 
 
 # Comparing Susceptibility
