@@ -129,6 +129,7 @@ last_points <- long_metrics %>%
 # Plotting
 ggplot(long_metrics, aes(x = Sample_Size, y = Value, color = Phyloseq_Object, group = Phyloseq_Object)) +
   geom_line() +
+  geom_vline(xintercept = 39, color = "red", size = 0.3) +  # Vertical line at sample size 39
   geom_text(data = last_points, aes(label = Phyloseq_Object), nudge_x = 1, hjust = 0, vjust = 0, size = 3, show.legend = FALSE) +
   theme_minimal() +
   labs(title = "Modularity Across Different Sample Sizes", x = "Sample Size", y = "Modularity") +
@@ -137,8 +138,9 @@ ggplot(long_metrics, aes(x = Sample_Size, y = Value, color = Phyloseq_Object, gr
 ```
 > Conclusion: There is definitely a strong effect of sample size and the metrics do begin to plateua, certainly by 100 samples, arguable by 50 we see saturation dependent on the metric. So because some of these phyloseq objects have 8-14 samples, we will need to curate larger phyloseq objects and revisit the questions we can ask.
 
+> Red line represents the 39 replicate sampling
 <div align="center">
-<img width="500" alt="image" src="https://github.com/user-attachments/assets/a6da00ee-e4b2-4fc5-8c3e-40020cd8ba20" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/c1e0e518-4405-456f-aca6-9f0d4e23e997" />
 </div>
 
 
