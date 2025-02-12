@@ -1,7 +1,9 @@
 # Networks :microbe:
 
 **Goal:** Traditional microbial ecology typically focuses on microbial shifts of particular bacteria. Networks are an opportunity to look at how the microbiome is organized and the interactions or co-occurence of bacteria.
-
+<div align="center">
+<img width="800" alt="image" src="https://github.com/user-attachments/assets/9141a4e6-031c-499e-b5a0-c84b9684ceba" />
+</div>
 
 **Determine the effect of replicate size on network metrics:**
 ```{r}
