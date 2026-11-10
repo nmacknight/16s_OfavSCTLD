@@ -15,25 +15,22 @@ Leveraging 192 unique barcodes, we performed the library prep in house and seque
 
 ```mermaid
 flowchart TD
-	subgraph  
-		A[Reads From Sequencer]-->B[ 1.Import Data];
-		B -->C[2.Cutadapt - Removes Primers & other artificial nucelotides];
-		C-->D[3.DADA2 - Cuts read length when Quality <30];
-	end
-	subgraph  
-		direction LR
-		D--Repeat Steps 1-3 for<br/>Each Sequence Run-->E([4.Merge]);
-		E-->F([5.Taxonomic Classification]);
-		F-->G([6.Filtration]);
-		G-->H([7.Phylogenetic Tree]);
-		H-->I([8.Export]);
-	end
-
+    subgraph S1["Per-Run Processing"]
+        A["Reads From Sequencer"] --> B["1. Import Data"]
+        B --> C["2. Cutadapt - Removes Primers & other artificial nucleotides"]
+        C --> D["3. DADA2 - Truncates reads where Quality #lt; 30"]
+    end
+    subgraph S2["Combined Analysis"]
+        direction LR
+        E(["4. Merge"]) --> F(["5. Taxonomic Classification"])
+        F --> G(["6. Filtration"])
+        G --> H(["7. Phylogenetic Tree"])
+        H --> I(["8. Export"])
+    end
+    D -- "Repeat Steps 1-3 for<br/>Each Sequence Run" --> E
 ```
 
-
-
-**Note:** Steps 1-3 below was applied to each sequencing run. Rather than combine all 9 runs into one script, I provided simply the first run ("D1D2") to demonstrate how each run was processed. The analysis steps from 1-3 are the same for each run, and then each run is merged together at step 4. 
+**Note:** Steps 1-3 below were applied to each sequencing run. Rather than combine all 9 runs into one script, I provided only the first run ("D1D2") to show how each run was processed. Steps 1-3 are the same for each run, and the runs are merged together at step 4.
 
 </details>
 <details>
